@@ -97,7 +97,8 @@ struct Profiler {
   //hooks
   auto instruction(u64 vaddr, u32 instruction) -> void;
   auto exceptionEnter() -> void;
-  auto exceptionReturn() -> void;
+  auto exceptionReturn(u32 target) -> void;
+  auto resume(u32 target) -> void;
   auto synchronize(s64 clocks) -> void { clockBase += clocks; }
   auto frame() -> void;
   auto clearCosts() -> void;

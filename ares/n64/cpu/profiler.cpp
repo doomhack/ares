@@ -146,6 +146,7 @@ auto CPU::Profiler::clearCosts() -> void {
 
 auto CPU::Profiler::frame() -> void {
   if(written) return;
+  if(!vi.active()) return;  //while the VI is off, ares reports arbitrary refreshes; only count real frames
   frames++;
   if(skipFrames && frames == skipFrames) {
     clearCosts();
@@ -207,6 +208,8 @@ auto CPU::Profiler::call(u32 target, u32 returnAddress) -> void {
 auto CPU::Profiler::tailCall(u32 target) -> void {
   auto& stack = stacks[current];
   if(stack.frames.empty()) return;
+  //the exception vector usually jumps to the real handler: keep the [exception] frame
+  if(nodes[stack.frames.back().node].func == FuncException) return call(target, 0xffff'ffff);
   charge();
   u32 parent = nodes[stack.frames.back().node].parent;
   u32 node = child(parent, resolve(target));
@@ -290,7 +293,7 @@ auto CPU::Profiler::exceptionEnter() -> void {
   stack.frames.push_back({node, 0xffff'ffff});
 }
 
-auto CPU::Profiler::exceptionReturn() -> void {
+auto CPU::Profiler::exceptionReturn(u32 target) -> void {
   if(written) return;
   charge();
   auto& stack = stacks[current];
@@ -304,8 +307,26 @@ auto CPU::Profiler::exceptionReturn() -> void {
     u32 thread = self.readDebug<Word>((s32)runningThreadSymbol);
     if(thread != stacks[current].thread) switchThread(thread);
   }
+  resume(target);
 }
 
+//ERET resumes the (possibly different) thread at target. Frames left on its
+//shadow stack from when it last stopped running (the yield path, or the thread
+//dispatcher it jumped into) are stale: unwind to the frame that target belongs to.
+auto CPU::Profiler::resume(u32 target) -> void {
+  auto& stack = stacks[current];
+  for(size_t n = stack.frames.size(); n-- > 0;) {
+    if(stack.frames[n].returnAddress == target) { stack.frames.resize(n); return; }
+    if(nodes[stack.frames[n].node].func == resolve(target)) { stack.frames.resize(n + 1); return; }
+  }
+  //nothing matches: leave the stack alone (code without symbols), unless it is
+  //empty, which means a thread starting at its entry point
+  if(stack.frames.empty() && isFunctionStart(target)) {
+    u32 node = child(stack.root, resolve(target));
+    nodes[node].calls++;
+    stack.frames.push_back({node, 0xffff'ffff});
+  }
+}
 auto CPU::Profiler::findSymbol(u32 address) const -> const Symbol* {
   auto it = std::upper_bound(symbols.begin(), symbols.end(), address, [](u32 a, const Symbol& s) { return a < s.address; });
   if(it == symbols.begin()) return nullptr;
