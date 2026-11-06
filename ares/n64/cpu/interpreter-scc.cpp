@@ -298,6 +298,7 @@ auto CPU::ERET() -> void {
   } else {
     pipeline.setPc(scc.epc);
     scc.status.exceptionLevel = 0;
+    if(unlikely(profiler.enabled)) profiler.exceptionReturn();
   }
   pipeline.exception();
   scc.llbit = 0;

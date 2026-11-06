@@ -1316,6 +1316,9 @@ struct CPU : Thread {
 
   std::vector<ProfileSlot> profileSlots;
 
+  #include "profiler.hpp"
+  auto profilerInstruction(u64 vaddr, u32 instruction) -> void { profiler.instruction(vaddr, instruction); }
+
   struct EmuxState {
     n64 excMask;
   } emuxState;

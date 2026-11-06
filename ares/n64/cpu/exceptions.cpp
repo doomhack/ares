@@ -16,6 +16,7 @@ auto CPU::Exception::trigger(u32 code, u32 coprocessor, bool tlbMiss) -> void {
   }
 
   if(!self.scc.status.exceptionLevel) {
+    if(unlikely(self.profiler.enabled)) self.profiler.exceptionEnter();
     self.scc.epc = self.ipu.pc;
     self.scc.status.exceptionLevel = 1;
     self.scc.cause.exceptionCode = code;

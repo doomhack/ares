@@ -1,5 +1,15 @@
 #include <n64/n64.hpp>
 #include <nall/gdb/server.hpp>
+//profiler.cpp
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <unordered_map>
+#if __has_include(<cxxabi.h>)
+  #include <cxxabi.h>
+  #define ARES_PROFILER_DEMANGLE 1
+#endif
 
 namespace ares::Nintendo64 {
 
@@ -23,6 +33,7 @@ CPU cpu;
 #include "serialization.cpp"
 #include "disassembler.cpp"
 #include "emux.cpp"
+#include "profiler.cpp"
 
 auto CPU::load(Node::Object parent) -> void {
   node = parent->append<Node::Object>("CPU");
@@ -30,6 +41,7 @@ auto CPU::load(Node::Object parent) -> void {
 }
 
 auto CPU::unload() -> void {
+  profiler.dump();
   debugger.unload();
   node.reset();
 }
@@ -40,6 +52,7 @@ auto CPU::main() -> void {
   }
 
   vi.refreshed = false;
+  if(unlikely(profiler.enabled)) profiler.frame();
   queue.remove(Queue::GDB_Poll);
   if(GDB::server.hasClient()) {
     queueInsert(Queue::GDB_Poll, (93750000*2)/60/240);
@@ -83,6 +96,7 @@ auto CPU::flushCount() -> void {
 auto CPU::synchronize() -> void {
   auto clocks = Thread::clock;
   auto counted = countClock;
+  if(unlikely(profiler.enabled)) profiler.synchronize(clocks);
   Thread::clock = 0;
   countClock = 0;
   jitClockTarget = 0;
@@ -177,6 +191,7 @@ auto CPU::instruction() -> bool {
   auto data = fetch(access);
   if (!data) return true;
   pipeline.begin();
+  if(unlikely(profiler.enabled) && Profiler::isCallOrReturn(*data)) profiler.instruction(ipu.pc, *data);
   instructionPrologue(ipu.pc, *data);
   decoderEXECUTE(*data);
   instructionEpilogue<0>();
@@ -226,6 +241,10 @@ auto CPU::power(bool reset) -> void {
   emuxState = {};
   fenv.setRound(float_env::toNearest);
   context.setMode();
+
+  profiler.dump();
+  profiler.configure();
+  if(profiler.enabled) profiler.reset();
 
   if constexpr(Accuracy::CPU::Recompiler) {
     auto buffer = ares::Memory::FixedAllocator::get().tryAcquire(63_MiB);

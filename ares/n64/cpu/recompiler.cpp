@@ -730,10 +730,16 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       const u32 expectedTagKey = (ii.address & ~0xfffu) | 1u;
       cmp32(IcacheTagKeyMem(lineIndex), imm(expectedTagKey), set_z);
       auto icacheMiss = jump(flag_ne);
-      if(system.homebrewMode) {
+      if(system.homebrewMode || self.profiler.enabled) {
         add64(ProfileIcacheHitsMem, ProfileIcacheHitsMem, imm(1));
       }
       deferSlowPathCacheMiss(icacheMiss, ii.address);
+    }
+
+    if(self.profiler.enabled && Profiler::isCallOrReturn(instruction)) {
+      // Profiler shadow call stack hook: runs before the jump (after internal-entry labels so loops re-enter through it) with exact cycle counts.
+      flushDeferredCycles();
+      callf(&CPU::profilerInstruction, imm64(ii.vaddr), imm(instruction));
     }
 
     auto slowPathStart = slowPaths.size();
@@ -822,7 +828,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
         const sljit_sw ramDataField = sdram ? (sljit_sw)(uintptr_t)&aleck64.sdram.data
                                              : (sljit_sw)(uintptr_t)&rdram.ram.data;
         const u32 ramByteOff = sdram ? (burst & 0xffffffu) : burst;
-        if(system.homebrewMode) {
+        if(system.homebrewMode || self.profiler.enabled) {
           add64(ProfileIcacheMissesMem, ProfileIcacheMissesMem, imm(1));
           if(!sdram) add64(mem0(RdramRbusIcacheReadsAddr), mem0(RdramRbusIcacheReadsAddr), imm(ICache));
         }
