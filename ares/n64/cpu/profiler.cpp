@@ -236,7 +236,11 @@ auto CPU::Profiler::switchThread(u32 thread) -> void {
   }
   Stack stack;
   stack.thread = thread;
-  stack.root = child(0, FuncThreadRoot);
+  //each thread gets its own root node (child() would merge them, since they share FuncThreadRoot)
+  stack.root = nodes.size();
+  Node root;
+  root.func = FuncThreadRoot;
+  nodes.push_back(std::move(root));
   stacks.push_back(std::move(stack));
   current = stacks.size() - 1;
 }
