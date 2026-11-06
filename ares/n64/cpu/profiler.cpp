@@ -27,6 +27,7 @@ auto CPU::Profiler::configure() -> void {
   if(!enabled) return;
   if(outputPath.empty()) outputPath = elfPath.empty() ? "ares-n64.profile" : elfPath + ".profile";
   symbols.clear();
+  exactSymbols.clear();
   runningThreadSymbol = 0;
   if(!elfPath.empty()) {
     if(loadSymbols(elfPath)) {
@@ -91,6 +92,7 @@ auto CPU::Profiler::loadSymbols(const std::string& path) -> bool {
       std::string name{raw, strnlen(raw, strtab.size - nameOffset)};
       if(name.empty() || name[0] == '.' || name[0] == '$') continue;
       if(name == "__osRunningThread" && type == 1) runningThreadSymbol = (u32)value;  //STT_OBJECT
+      exactSymbols.push_back({(u32)value, name});
       auto sec = section(shndx);
       bool executable = sec.flags & 4;  //SHF_EXECINSTR
       if(!executable) continue;
@@ -99,6 +101,7 @@ auto CPU::Profiler::loadSymbols(const std::string& path) -> bool {
       symbols.push_back({(u32)value, (u32)size, type == 2, name});
     }
   }
+  std::sort(exactSymbols.begin(), exactSymbols.end());
   std::sort(symbols.begin(), symbols.end(), [](const Symbol& a, const Symbol& b) {
     if(a.address != b.address) return a.address < b.address;
     return a.function > b.function;  //prefer STT_FUNC for aliases
@@ -132,6 +135,7 @@ auto CPU::Profiler::reset() -> void {
   eventCount = 0;
   frames = 0;
   written = false;
+  clearTimeline();
   switchThread(0);
   last = counters();
 }
@@ -142,12 +146,14 @@ auto CPU::Profiler::clearCosts() -> void {
   clockBase -= last.clocks;  //restart the clock at zero
   last.clocks = 0;
   eventCount = 0;
+  clearTimeline();
 }
 
 auto CPU::Profiler::frame() -> void {
   if(written) return;
   if(!vi.active()) return;  //while the VI is off, ares reports arbitrary refreshes; only count real frames
   frames++;
+  instant(TrackFrames, label("frame"), now(), frames);
   if(skipFrames && frames == skipFrames) {
     clearCosts();
     printf("[profiler] skipped %llu frames, now recording\n", (unsigned long long)skipFrames);
@@ -231,6 +237,11 @@ auto CPU::Profiler::ret(u32 target) -> void {
 }
 
 auto CPU::Profiler::switchThread(u32 thread) -> void {
+  if(!stacks.empty()) {
+    s64 t = now();
+    span(TrackThreadBase + current, 0, threadStart, t);
+    threadStart = t;
+  }
   for(u32 n = 0; n < stacks.size(); n++) {
     if(stacks[n].thread == thread) { current = n; return; }
   }
@@ -375,6 +386,7 @@ auto CPU::Profiler::nodeName(u32 node) const -> std::string {
 auto CPU::Profiler::dump() -> void {
   if(!enabled || written || nodes.size() <= 1) return;
   charge();
+  closeTimeline();
   written = true;
 
   //inclusive costs: children always have higher indices than their parents
@@ -492,8 +504,191 @@ auto CPU::Profiler::dump() -> void {
         (unsigned long long)f->calls, (long long)f->self.icacheMisses, (long long)f->self.dcacheMisses,
         (long long)f->self.dcacheWritebacks, dHit, f->name.c_str());
     }
+    writeTimelineSummary(fp);
     fclose(fp);
   }
 
-  printf("[profiler] wrote %s.{callgrind,folded,txt} (%d call tree nodes)\n", outputPath.c_str(), (int)nodes.size());
+  writeTrace();
+  printf("[profiler] wrote %s.{callgrind,folded,txt,trace.json} (%d call tree nodes, %d timeline events)\n",
+    outputPath.c_str(), (int)nodes.size(), (int)(spans.size() + instants.size()));
+}
+
+//timeline
+
+auto CPU::Profiler::threadName(u32 index) const -> std::string {
+  auto& stack = stacks[index];
+  std::string result = nodeName(stack.root);
+  //name the thread after its entry point: the first function seen at its root
+  if(!nodes[stack.root].children.empty()) result += " " + name(nodes[stack.root].children.front().first);
+  return result;
+}
+
+auto CPU::Profiler::label(const std::string& name) -> u32 {
+  for(u32 n = 0; n < labels.size(); n++) if(labels[n] == name) return n;
+  labels.push_back(name);
+  return labels.size() - 1;
+}
+
+auto CPU::Profiler::span(u32 track, u32 label, s64 start, s64 end) -> void {
+  if(written || end <= start) return;
+  if(spans.size() + instants.size() >= MaxTimelineEvents) { droppedEvents++; return; }
+  spans.push_back({track, label, start, end});
+}
+
+auto CPU::Profiler::instant(u32 track, u32 label, s64 time, u32 value) -> void {
+  if(written) return;
+  if(spans.size() + instants.size() >= MaxTimelineEvents) { droppedEvents++; return; }
+  instants.push_back({track, label, time, value});
+}
+
+auto CPU::Profiler::clearTimeline() -> void {
+  spans.clear();
+  instants.clear();
+  droppedEvents = 0;
+  s64 t = now();
+  threadStart = t;
+  rspStart = t;
+  rspDmaStart = t;
+}
+
+//close spans still open when the profile is written
+auto CPU::Profiler::closeTimeline() -> void {
+  s64 t = now();
+  if(!stacks.empty()) span(TrackThreadBase + current, 0, threadStart, t);
+  threadStart = t;
+  if(rspRunning) span(TrackRSP, rspLabel, rspStart, t), rspStart = t;
+  if(rspDmaBusy) span(TrackRSPDMA, rspDmaLabel, rspDmaStart, t), rspDmaStart = t;
+}
+
+auto CPU::Profiler::exactSymbol(u32 address) const -> const std::string* {
+  auto it = std::lower_bound(exactSymbols.begin(), exactSymbols.end(), address,
+    [](const std::pair<u32, std::string>& s, u32 a) { return s.first < a; });
+  if(it != exactSymbols.end() && it->first == address) return &it->second;
+  return nullptr;
+}
+
+//libultra's osSpTaskLoad copies the OSTask to the end of DMEM (0xfc0) before the RSP starts:
+//  +0x00 type (1 = gfx, 2 = audio, ...), +0x10 ucode (physical address)
+//anything else (libdragon rspq, custom microcode) is named by a hash of IMEM
+auto CPU::Profiler::rspTaskName() -> std::string {
+  //DMEM is stored big-endian; read it directly to skip the debugger hook in RSP::Writable::read
+  auto dmem = [&](u32 address) -> u32 { return bswap32(*(u32*)&rsp.dmem.data[address & rsp.dmem.maskWord]); };
+  u32 type = dmem(0xfc0);
+  u32 ucode = dmem(0xfd0);
+  char buffer[96];
+  if(type >= 1 && type <= 7 && ucode && (ucode & 0x1fff'ffff) < 0x0080'0000) {
+    static const char* types[] = {"", "gfx", "audio", "video", "jpeg", "task5", "task6", "hvq"};
+    u32 vaddr = 0x8000'0000 | (ucode & 0x1fff'ffff);
+    if(auto symbol = exactSymbol(vaddr)) {
+      snprintf(buffer, sizeof(buffer), "%s: %s", types[type], symbol->c_str());
+    } else {
+      snprintf(buffer, sizeof(buffer), "%s: ucode 0x%08x", types[type], vaddr);
+    }
+    return buffer;
+  }
+  u64 hash = XXH3_64bits(rsp.imem.data, 4096);
+  snprintf(buffer, sizeof(buffer), "ucode %08x", (u32)hash);
+  return buffer;
+}
+
+auto CPU::Profiler::rspPoll(s64 rspClock) -> void {
+  if(written) return;
+  s64 t = clockBase + rspClock;
+  bool running = !rsp.status.halted;
+  if(running != rspRunning) {
+    if(running) {
+      rspStart = t;
+      rspLabel = label(rspTaskName());
+    } else {
+      span(TrackRSP, rspLabel, rspStart, t);
+    }
+    rspRunning = running;
+  }
+  bool dma = (bool)rsp.dma.busy.any();
+  if(dma != rspDmaBusy) {
+    if(dma) {
+      rspDmaStart = t;
+      rspDmaLabel = label(rsp.dma.busy.read ? "RDRAM -> SP" : "SP -> RDRAM");
+    } else {
+      span(TrackRSPDMA, rspDmaLabel, rspDmaStart, t);
+    }
+    rspDmaBusy = dma;
+  }
+}
+
+auto CPU::Profiler::rdpSubmit(s64 threadClock, u32 bytes) -> void {
+  instant(TrackRDP, label("RDP submit"), clockBase + threadClock, bytes);
+}
+
+//Chrome trace event format: open in https://ui.perfetto.dev or chrome://tracing
+auto CPU::Profiler::writeTrace() -> void {
+  FILE* fp = fopen((outputPath + ".trace.json").c_str(), "wb");
+  if(!fp) return;
+  auto us = [](s64 clocks) { return (clocks < 0 ? 0 : clocks) / 187.5; };  //187.5 MHz -> microseconds
+  auto escape = [](const std::string& s) {
+    std::string r;
+    for(char c : s) {
+      if(c == '"' || c == '\\') r += '\\';
+      if((u8)c < 0x20) continue;
+      r += c;
+    }
+    return r;
+  };
+  fprintf(fp, "{\"displayTimeUnit\":\"ns\",\"traceEvents\":[\n");
+  fprintf(fp, "{\"ph\":\"M\",\"pid\":1,\"name\":\"process_name\",\"args\":{\"name\":\"N64\"}}");
+  auto track = [&](u32 tid, const std::string& name, u32 order) {
+    fprintf(fp, ",\n{\"ph\":\"M\",\"pid\":1,\"tid\":%u,\"name\":\"thread_name\",\"args\":{\"name\":\"%s\"}}", tid, escape(name).c_str());
+    fprintf(fp, ",\n{\"ph\":\"M\",\"pid\":1,\"tid\":%u,\"name\":\"thread_sort_index\",\"args\":{\"sort_index\":%u}}", tid, order);
+  };
+  track(TrackFrames, "VI frames", 0);
+  for(u32 n = 0; n < stacks.size(); n++) track(TrackThreadBase + n, "CPU " + threadName(n), 10 + n);
+  track(TrackRSP, "RSP", 1000);
+  track(TrackRSPDMA, "SP DMA", 1001);
+  track(TrackRDP, "RDP submits", 1002);
+  for(auto& s : spans) {
+    std::string name = s.track >= TrackThreadBase ? threadName(s.track - TrackThreadBase) : labels[s.label];
+    fprintf(fp, ",\n{\"ph\":\"X\",\"pid\":1,\"tid\":%u,\"name\":\"%s\",\"ts\":%.3f,\"dur\":%.3f}",
+      s.track, escape(name).c_str(), us(s.start), us(s.end) - us(s.start));
+  }
+  for(auto& i : instants) {
+    fprintf(fp, ",\n{\"ph\":\"i\",\"s\":\"t\",\"pid\":1,\"tid\":%u,\"name\":\"%s\",\"ts\":%.3f,\"args\":{\"value\":%u}}",
+      i.track, escape(labels[i.label]).c_str(), us(i.time), i.value);
+  }
+  fprintf(fp, "\n]}\n");
+  fclose(fp);
+}
+
+auto CPU::Profiler::writeTimelineSummary(FILE* fp) -> void {
+  s64 total = now();
+  if(total <= 0) return;
+  struct Row { std::string name; u64 count = 0; s64 busy = 0, longest = 0; };
+  std::vector<Row> rows;
+  auto row = [&](const std::string& name) -> Row& {
+    for(auto& r : rows) if(r.name == name) return r;
+    rows.push_back({name});
+    return rows.back();
+  };
+  s64 rspBusy = 0, dmaBusy = 0;
+  for(auto& s : spans) {
+    s64 d = s.end - s.start;
+    if(s.track == TrackRSP) {
+      rspBusy += d;
+      auto& r = row(labels[s.label]);
+      r.count++; r.busy += d; r.longest = max(r.longest, d);
+    }
+    if(s.track == TrackRSPDMA) dmaBusy += d;
+  }
+  std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.busy > b.busy; });
+  u64 frameCount = 0;
+  for(auto& i : instants) if(i.track == TrackFrames) frameCount++;
+  auto ms = [](s64 clocks) { return clocks / 187500.0; };
+  fprintf(fp, "\nRSP: busy %.2f%% (%.3f ms of %.3f ms), SP DMA busy %.2f%%, %llu frames recorded\n",
+    100.0 * rspBusy / total, ms(rspBusy), ms(total), 100.0 * dmaBusy / total, (unsigned long long)frameCount);
+  fprintf(fp, "%7s %10s %12s %12s %12s %10s  %s\n", "busy%", "tasks", "total ms", "avg ms", "longest ms", "per frame", "RSP task");
+  for(auto& r : rows) {
+    fprintf(fp, "%6.2f%% %10llu %12.3f %12.4f %12.4f %10.2f  %s\n",
+      100.0 * r.busy / total, (unsigned long long)r.count, ms(r.busy), ms(r.busy) / r.count, ms(r.longest),
+      frameCount ? (double)r.count / frameCount : 0.0, r.name.c_str());
+  }
+  if(droppedEvents) fprintf(fp, "warning: timeline full, %llu events dropped\n", (unsigned long long)droppedEvents);
 }

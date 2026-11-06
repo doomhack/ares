@@ -82,6 +82,7 @@ auto RDP::writeWord(u32 address, u32 data_, Thread& thread) -> void {
       command.current = command.start;
       command.startValid = 0;
     }
+    if(unlikely(cpu.profiler.enabled)) cpu.profiler.rdpSubmit(thread.clock, command.end > command.current ? command.end - command.current : 0);
     flushCommands();
     if(&thread == &cpu) cpu.forceSynchronize();
   }

@@ -43,6 +43,7 @@ auto RSP::main() -> void {
     }
 
     dmaStep(Thread::clock - clock);
+    if(unlikely(cpu.profiler.enabled)) cpu.profiler.rspPoll(Thread::clock);
   }
 }
 

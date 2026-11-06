@@ -117,4 +117,32 @@ struct Profiler {
   auto isFunctionStart(u32 address) const -> bool;
   auto name(u32 func) const -> std::string;
   auto nodeName(u32 node) const -> std::string;
+  auto threadName(u32 stack) const -> std::string;
+
+  //timeline: busy spans and instant markers, in 187.5 MHz scheduler clocks
+  enum : u32 { TrackFrames = 0, TrackRSP = 1, TrackRSPDMA = 2, TrackRDP = 3, TrackThreadBase = 100 };
+  static constexpr u64 MaxTimelineEvents = 20'000'000;
+  struct Span { u32 track; u32 label; s64 start; s64 end; };
+  struct Instant { u32 track; u32 label; s64 time; u32 value; };
+  std::vector<Span> spans;
+  std::vector<Instant> instants;
+  std::vector<std::string> labels;
+  std::vector<std::pair<u32, std::string>> exactSymbols;  //every named symbol, for naming microcode blobs
+  u64 droppedEvents = 0;
+  bool rspRunning = false, rspDmaBusy = false;
+  s64 rspStart = 0, rspDmaStart = 0, threadStart = 0;
+  u32 rspLabel = 0, rspDmaLabel = 0;
+
+  auto now() const -> s64 { return clockBase + self.Thread::clock; }
+  auto label(const std::string& name) -> u32;
+  auto span(u32 track, u32 label, s64 start, s64 end) -> void;
+  auto instant(u32 track, u32 label, s64 time, u32 value = 0) -> void;
+  auto clearTimeline() -> void;
+  auto closeTimeline() -> void;
+  auto exactSymbol(u32 address) const -> const std::string*;
+  auto rspTaskName() -> std::string;
+  auto rspPoll(s64 rspClock) -> void;  //called from RSP::main
+  auto rdpSubmit(s64 threadClock, u32 bytes) -> void;  //called on DPC_END writes
+  auto writeTrace() -> void;
+  auto writeTimelineSummary(FILE* fp) -> void;
 } profiler{*this};
