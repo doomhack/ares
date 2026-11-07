@@ -121,6 +121,7 @@ auto Program::load(string location) -> bool {
     propertiesViewer.reload();
     traceLogger.reload();
     tapeViewer.reload();
+    profilerViewer.reload();
   }
   state = {};  //reset hotkey state slot to 1
   if(settings.boot.debugger) {
@@ -191,6 +192,7 @@ auto Program::unload() -> void {
     streamManager.unload();
     propertiesViewer.unload();
     traceLogger.unload();
+    profilerViewer.unload();
     tapeViewer.unload();
   }
   if(gameBrowserWindowConstructed) gameBrowserWindow.setVisible(false);

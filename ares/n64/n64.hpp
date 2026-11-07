@@ -14,6 +14,7 @@
 #include <functional>
 #include <span>
 #include <vector>
+#include <n64/profiler.hpp>
 
 #if defined(ARCHITECTURE_AMD64)
 #include <nmmintrin.h>

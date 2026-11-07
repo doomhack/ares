@@ -35,6 +35,8 @@ auto option(string name, string value) -> bool {
   vulkan.outputUpscale = vulkan.supersampleScanout ? 1 : vulkan.internalUpscale;
   #endif
   if(name == "Homebrew Mode") system.homebrewMode = value.boolean();
+  if(name == "Profiler") cpu.profiler.optionEnabled = value.boolean();
+  if(name == "Profiler Symbols") cpu.profiler.optionSymbols = (const char*)value;
   if(name == "Deterministic Entropy") system.deterministicEntropy = value.boolean();
   if(name == "Recompiler") {
     if constexpr(Accuracy::CPU::Recompiler) {

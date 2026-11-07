@@ -467,7 +467,7 @@ auto CPU::FADD_S(u8 fd, u8 fs, u8 ft) -> void {
   CHECK_FPE(f32, ffd, FS(f32) + FT(f32));
   if(!fpuCheckOutput(ffd)) return;
   FD(f32) = ffd;
-  step((3 - 1) * 2);
+  step((2 - 1) * 2);
 }
 
 auto CPU::FADD_D(u8 fd, u8 fs, u8 ft) -> void {
@@ -872,7 +872,7 @@ auto CPU::FMUL_S(u8 fd, u8 fs, u8 ft) -> void {
   CHECK_FPE(f32, ffd, ffs * fft);
   if(!fpuCheckOutput(ffd)) return;
   FD(f32) = ffd;
-  step((5 - 1) * 2);
+  step((2 - 1) * 2);  //see CPU::isMulS for the back-to-back case
 }
 
 auto CPU::FMUL_D(u8 fd, u8 fs, u8 ft) -> void {
@@ -882,7 +882,7 @@ auto CPU::FMUL_D(u8 fd, u8 fs, u8 ft) -> void {
   CHECK_FPE(f64, ffd, ffs * fft);
   if(!fpuCheckOutput(ffd)) return;
   FD(f64) = ffd;
-  step((8 - 1) * 2);
+  step((2 - 1) * 2);
 }
 
 auto CPU::FNEG_S(u8 fd, u8 fs) -> void {
@@ -970,7 +970,7 @@ auto CPU::FSUB_S(u8 fd, u8 fs, u8 ft) -> void {
   CHECK_FPE(f32, ffd, ffs - fft);
   if(!fpuCheckOutput(ffd)) return;
   FD(f32) = ffd;
-  step((3 - 1) * 2);
+  step((2 - 1) * 2);
 }
 
 auto CPU::FSUB_D(u8 fd, u8 fs, u8 ft) -> void {

@@ -121,6 +121,7 @@ struct Settings : Markup::Node {
     bool supersampling = false;
     bool disableVideoInterfaceProcessing = false;
     bool weaveDeinterlacing = true;
+    bool profiler = false;  //CPU profiler from power on (Tools > Profiler)
   } nintendo64;
 
   struct PlayStation {

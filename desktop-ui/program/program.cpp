@@ -157,6 +157,7 @@ auto Program::main() -> void {
     graphicsViewer.liveRefresh();
     propertiesViewer.liveRefresh();
     tapeViewer.liveRefresh();
+    profilerViewer.liveRefresh();
   }
   if (_quitRequested) {
     quit();

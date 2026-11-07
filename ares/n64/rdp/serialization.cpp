@@ -17,6 +17,31 @@ auto RDP::serialize(serializer& s) -> void {
   s(command.ready);
   s(command.crashed);
 
+  s(timing.busyEnd);
+  s(timing.pendingUntil);
+  s(timing.segmentFrom);
+  s(timing.segmentTo);
+  s(timing.pipeFrom);
+  for(auto& time : timing.fullQueue) s(time);
+  s(timing.fullCount);
+  s(timing.segmentStart);
+  s(timing.segmentEnd);
+  s(timing.pipeOpen);
+  s(timing.pipeBusy);
+  s(timing.cycleType);
+  s(timing.imageRead);
+  s(timing.zCompare);
+  s(timing.zUpdate);
+  s(timing.colorSize);
+  s(timing.textureSize);
+  s(timing.scissorLeft);
+  s(timing.scissorTop);
+  s(timing.scissorRight);
+  s(timing.scissorBottom);
+  for(auto& word : timing.carry) s(word);
+  s(timing.carryLength);
+  s(cpu.busContention);
+
   s(edge.lmajor);
   s(edge.level);
   s(edge.tile);

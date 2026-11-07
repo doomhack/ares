@@ -24,6 +24,17 @@ struct VI : Thread, Memory::RCP<VI> {
   auto power(bool reset) -> void;
   auto active() -> bool { return io.colorDepth != 0; }
 
+  //RDRAM bandwidth taken by scanout, updated every field. busLoad is the bytes
+  //fetched per field relative to 640x480 32-bit interlaced (614400 bytes);
+  //busActive is set while the VI runs at all, which costs bandwidth even when
+  //nothing is fetched (a blanked VI on hardware, see vi.cpp).
+  auto updateBusLoad() -> void;
+  auto busSlowdown(double running, double perLoad) const -> double {
+    return busActive ? running + perLoad * busLoad : 0.0;
+  }
+  bool busActive = false;
+  double busLoad = 0.0;
+
   //io.cpp
   auto readWord(u32 address, Thread& thread) -> u32;
   auto writeWord(u32 address, u32 data, Thread& thread) -> void;

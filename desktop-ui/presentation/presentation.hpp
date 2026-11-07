@@ -83,6 +83,7 @@ struct Presentation : Window {
       MenuItem propertiesViewerAction{&toolsMenu};
       MenuItem traceLoggerAction{&toolsMenu};
       MenuItem tapeViewerAction{&toolsMenu};
+      MenuItem profilerAction{&toolsMenu};
     Menu helpMenu{&menuBar};
       MenuItem aboutAction{&helpMenu};
 

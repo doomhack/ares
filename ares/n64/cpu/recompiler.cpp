@@ -719,8 +719,10 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       }
     }
 
-    if(firstInstruction || (ii.vaddr & 0x1f) == 0) {
+    if(firstInstruction || isInternalEntry || (ii.vaddr & 0x1f) == 0) {
       // Keep icache tag/coherency checks in sync with interpreter behavior.
+      // Internal entries need a guard too: a loop back-edge can land mid-line
+      // on a line that code called from the loop body has since evicted.
       flushDeferredCycles();
       if(!self.icache.coherent(ii.vaddr, ii.address)) {
         resetCompiler();
@@ -730,10 +732,16 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       const u32 expectedTagKey = (ii.address & ~0xfffu) | 1u;
       cmp32(IcacheTagKeyMem(lineIndex), imm(expectedTagKey), set_z);
       auto icacheMiss = jump(flag_ne);
-      if(system.homebrewMode) {
+      if(system.homebrewMode || self.profiler.enabled) {
         add64(ProfileIcacheHitsMem, ProfileIcacheHitsMem, imm(1));
       }
       deferSlowPathCacheMiss(icacheMiss, ii.address);
+    }
+
+    if(self.profiler.enabled && Profiler::isCallOrReturn(instruction)) {
+      // Profiler shadow call stack hook: runs before the jump (after internal-entry labels so loops re-enter through it) with exact cycle counts.
+      flushDeferredCycles();
+      callf(&CPU::profilerInstruction, imm64(ii.vaddr), imm(instruction));
     }
 
     auto slowPathStart = slowPaths.size();
@@ -746,9 +754,16 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
     if(unlikely(instruction == branchToSelf || instruction == jumpToSelf)) {
       instructionCycles = 64 * 2;
     }
+    if(isMulS(instruction) && !lastInstruction && isMulSChain(instruction, plan.instructions[idx + 1].instruction)) {
+      instructionCycles += 1 * 2;
+    }
     emitDeferredCycles += instructionCycles;
-    // Synchronize cycles before any branch/helper boundary.
-    if(delaySlot || info.branch() || emitCallfEmitted) flushDeferredCycles();
+    // A slow path charges these cycles itself, then rejoins after this point.
+    u32 slowPathCycles = emitDeferredCycles;
+    bool hasSlowPath = slowPaths.size() != slowPathStart;
+    // Synchronize cycles before any branch/helper boundary, and before a slow path
+    // rejoins so that the cycles are not charged a second time on that path.
+    if(delaySlot || info.branch() || emitCallfEmitted || hasSlowPath) flushDeferredCycles();
 
     // EndBlock must be observed at entry, delay-slot completion, likely-branch flows and helpers.
     bool needEndBlockCheck = firstInstruction || delaySlot || info.likelyBranch() || emitCallfEmitted;
@@ -771,10 +786,10 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
       jumpEpilog(flag_nz);
     }
 
-    if(slowPaths.size() != slowPathStart) {
+    if(hasSlowPath) {
       // New slow paths created by this opcode resume right after it.
       auto resume = sljit_emit_label(compiler);
-      bindSlowPaths(slowPathStart, resume, emitDeferredCycles, !delaySlot);
+      bindSlowPaths(slowPathStart, resume, slowPathCycles, !delaySlot);
     }
 
     bool prevIsConditionalBranch = delaySlot && idx > 0
@@ -822,11 +837,12 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
         const sljit_sw ramDataField = sdram ? (sljit_sw)(uintptr_t)&aleck64.sdram.data
                                              : (sljit_sw)(uintptr_t)&rdram.ram.data;
         const u32 ramByteOff = sdram ? (burst & 0xffffffu) : burst;
-        if(system.homebrewMode) {
+        if(system.homebrewMode || self.profiler.enabled) {
           add64(ProfileIcacheMissesMem, ProfileIcacheMissesMem, imm(1));
           if(!sdram) add64(mem0(RdramRbusIcacheReadsAddr), mem0(RdramRbusIcacheReadsAddr), imm(ICache));
         }
-        emitCpuStep(96);
+        emitCpuStep(CPU::InstructionCache::FillClocks);
+        add64(CpuClockMem, CpuClockMem, mem(sreg(0), offsetof(CPU, busContention)));
         mov32(IcacheTagKeyMem(lineIndex), imm(tagKey));
         mov64(reg(1), mem0(ramDataField));
         mov128(IcacheLineWordsMem(lineIndex, 0x00), mem(reg(1), sljit_sw(ramByteOff + 0x00)));

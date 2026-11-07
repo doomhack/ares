@@ -410,6 +410,9 @@ Presentation::Presentation() {
   traceLoggerAction.setText("Tracer").setIcon(Icon::Emblem::Script).onActivate([&] {
     toolsWindow.show("Tracer");
   });
+  profilerAction.setText("Profiler").setIcon(Icon::Emblem::Program).onActivate([&] {
+    toolsWindow.show("Profiler");
+  });
   tapeViewerAction.setText("Tape").setIcon(Icon::Device::Tape).onActivate([&] {
     toolsWindow.show("Tape");
   });

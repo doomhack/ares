@@ -191,6 +191,9 @@ struct CPU : Thread {
        }
     }
 
+    //measured on hardware (tools/n64calib), in scheduler clocks (2 per CPU cycle)
+    static constexpr u32 FillClocks = 43 * 2;
+
     //16KB
     struct Line {
       auto valid() const -> bool { return tagKey & 1u; }
@@ -206,7 +209,7 @@ struct CPU : Thread {
       }
 
       auto fill(u32 paddr, CPU& cpu) -> void {
-        cpu.step(48 * 2);
+        cpu.step(FillClocks + cpu.busContention);
         const u32 tag = paddr & ~0x0000'0fffu;
         tagKey = tag;
         setValid(true);
@@ -238,6 +241,10 @@ struct CPU : Thread {
 
     template<u32 Size> auto readDebug(u64 vaddr, u32 paddr) -> u64;
     template<u32 Size> auto writeDebug(u64 vaddr, u32 paddr, u64 value) -> void;
+
+    //measured on hardware (tools/n64calib), in scheduler clocks (2 per CPU cycle)
+    static constexpr u32 FillClocks = 34 * 2;
+    static constexpr u32 WriteBackClocks = 63;
 
     //8KB
     struct Line {
@@ -343,6 +350,33 @@ struct CPU : Thread {
   auto segment(u64 vaddr) -> Context::Segment;
   template<u32 Dir, u32 Size> auto devirtualize(u64 vaddr, bool raiseAlignedError = true, bool raiseExceptions = true) -> PhysAccess;
   auto devirtualizeDebug(u64 vaddr) -> u64;
+
+  //extra scheduler clocks on each RDRAM access by the CPU: the RDP's share while
+  //it is busy (rdpContention) plus the VI's share for a cache fill (viFill).
+  //Cache fills, also from the recompiler, pay busContention; writebacks and
+  //uncached accesses pay the VI more (viWriteBack, viUncached instead of viFill).
+  s64 busContention = 0;
+  s64 rdpContention = 0;
+  s64 viFill = 0;
+  s64 viWriteBack = 0;
+  s64 viUncached = 0;
+  auto updateBusContention() -> void { busContention = rdpContention + viFill; }
+
+  //MUL.S costs 2 cycles, plus 1 more when the next instruction is a MUL.S that
+  //reads its result. tools/n64calib v3.1 on hardware: 8 dependent MUL.S per
+  //iteration take 26 cycles (fmul_b2b), two interleaved chains take 19 (fmul_pair).
+  static auto isMulS(u32 instruction) -> bool { return (instruction & 0xffe0003f) == 0x46000002; }
+  static auto isMulSChain(u32 first, u32 next) -> bool {
+    if(!isMulS(first) || !isMulS(next)) return false;
+    u32 fd = first >> 6 & 31;
+    return fd == (next >> 11 & 31) || fd == (next >> 16 & 31);
+  }
+
+  //measured on hardware (tools/n64calib), in scheduler clocks (2 per CPU cycle).
+  //The write figure is the average for a store every 5 instructions: the write
+  //buffer that lets stores overlap with later instructions is not modelled.
+  static constexpr u32 UncachedRdramReadClocks = 31 * 2;
+  static constexpr u32 UncachedRdramWriteClocks = 23;
 
   auto fetch(PhysAccess access) -> maybe<u32>;
   auto jitFetch(u64 vaddr, u32 addr) -> void {
@@ -1315,6 +1349,9 @@ struct CPU : Thread {
   };
 
   std::vector<ProfileSlot> profileSlots;
+
+  #include "profiler.hpp"
+  auto profilerInstruction(u64 vaddr, u32 instruction) -> void { profiler.instruction(vaddr, instruction); }
 
   struct EmuxState {
     n64 excMask;

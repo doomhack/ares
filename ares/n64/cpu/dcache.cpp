@@ -4,7 +4,7 @@ auto CPU::DataCache::Line::hit(u32 paddr) const -> bool {
 }
 
 auto CPU::DataCache::Line::fill(u32 paddr) -> void {
-  cpu.step(40 * 2);
+  cpu.step(FillClocks + cpu.busContention);
   const u32 tag = paddr & ~0x0000'0fffu;
   dirty  = 0;
   tagKey = tag;
@@ -13,7 +13,7 @@ auto CPU::DataCache::Line::fill(u32 paddr) -> void {
 }
 
 auto CPU::DataCache::Line::writeBack() -> void {
-  cpu.step(40 * 2);
+  cpu.step(WriteBackClocks + cpu.rdpContention + cpu.viWriteBack);
   const u32 tag = tagKey & ~0x0000'0fffu;
   cpu.busWriteBurst<DCache>(tag | index, words);
 }
@@ -58,7 +58,7 @@ auto CPU::DataCache::read(u64 vaddr, u32 paddr) -> u64 {
     line.fill(paddr);
     self.profile.dcacheMisses++;
   } else {
-    cpu.step(1 * 2);
+    //a load hit completes in the pipeline: no cycles beyond the instruction itself
     self.profile.dcacheHits++;
   }
   return line.read<Size>(paddr);
@@ -87,7 +87,7 @@ auto CPU::DataCache::write(u64 vaddr, u32 paddr, u64 data) -> void {
     line.fill(paddr);
     self.profile.dcacheMisses++;
   } else {
-    cpu.step(1 * 2);
+    //a store hit completes in the pipeline: no cycles beyond the instruction itself
     self.profile.dcacheHits++;
   }
   line.write<Size>(paddr, data);

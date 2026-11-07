@@ -4,8 +4,7 @@
 #define SLJIT_FREE_EXEC(ptr, data)      0
 #define SLJIT_EXEC_OFFSET(ptr)          0
 
-//debug-only options
-#if !defined(BUILD_DEBUG)
+//these change the layout of struct sljit_compiler, so they must match in every
+//translation unit; the sljit target is not built with BUILD_DEBUG
 #define SLJIT_DEBUG     0
 #define SLJIT_VERBOSE   0
-#endif

@@ -163,9 +163,8 @@ auto CPU::Recompiler::jitMemoryOpcode(u32 instruction, u32 size, u32 mode,
   cmp32(mem(reg(2), DcacheLineTagKeyOff), reg(3), set_z);
   auto cacheMiss = jump(flag_nz);
 
-  // Cache hit: account for the hit latency, then read/write the cached value.
-  emitCpuStep(2);
-  if(system.homebrewMode) {
+  // Cache hit: completes in the pipeline, so no cycles beyond the instruction itself.
+  if(system.homebrewMode || self.profiler.enabled) {
     add64(ProfileDcacheHitsMem, ProfileDcacheHitsMem, imm(1));
   }
   if(loadLinked) {
