@@ -33,6 +33,7 @@ auto RSP::unload() -> void {
 auto RSP::main() -> void {
   while(Thread::clock < 0) {
     auto clock = Thread::clock;
+    dmaSyncClock = clock;
 
     if(status.halted) {
       step(128);
@@ -42,7 +43,7 @@ auto RSP::main() -> void {
       instruction();
     }
 
-    dmaStep(Thread::clock - clock);
+    dmaSync();
     if(unlikely(cpu.profiler.enabled)) cpu.profiler.rspPoll(Thread::clock);
   }
 }

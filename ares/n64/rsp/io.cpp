@@ -9,6 +9,7 @@ auto RSP::readWord(u32 address, Thread& thread) -> u32 {
 auto RSP::ioRead(u32 address, Thread &thread) -> u32 {
   address = (address & 0x1f) >> 2;
   n32 data;
+  dmaSync();
 
   if(address == 0) {
     //SP_PBUS_ADDRESS
@@ -80,6 +81,7 @@ auto RSP::writeWord(u32 address, u32 data, Thread& thread) -> void {
 auto RSP::ioWrite(u32 address, u32 data_, Thread& thread) -> void {
   address = (address & 0x1f) >> 2;
   n32 data = data_;
+  dmaSync();  //a new transfer must not be charged for time that passed before it started
 
   if(address == 0) {
     //SP_PBUS_ADDRESS

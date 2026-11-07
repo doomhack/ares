@@ -263,6 +263,8 @@ struct RSP : Thread, Memory::RCP<RSP> {
   //dma.cpp
   auto dmaQueue(u32 clocks, Thread& thread) -> void;
   auto dmaStep(u32 clocks) -> void;
+  auto dmaSync() -> void;  //advance DMA to the current RSP clock (also mid-block, before SP register accesses)
+  s64 dmaSyncClock = 0;    //RSP clock up to which DMA has been advanced
   auto dmaTransferStart(Thread& thread) -> void;
   auto dmaTransferStep() -> void;
 

@@ -1,6 +1,9 @@
 //Measured on hardware (tools/n64calib): a transfer pays a fixed setup cost, then
 //moves 8 bytes every 3.875 clocks from RDRAM, or every 3.5 clocks to RDRAM.
 static constexpr u32 DmaSetupClocks = 36;
+//Small transfers take no less than this: an 8-byte read measures about 58 clocks,
+//where setup plus one row would give 40 (fitted to one point, dma_in_8)
+static constexpr u32 DmaMinClocks = 58;
 
 static auto dmaRowClocks(u32 length, bool write) -> u32 {
   u32 blocks = (length + 8) / 8;
@@ -14,10 +17,20 @@ auto RSP::dmaQueue(u32 clocks, Thread& thread) -> void {
 auto RSP::dmaStep(u32 clocks) -> void {
   if(dma.busy.any()) {
     dma.clock += clocks;
-    if(dma.clock >= 0) {
+    while(dma.busy.any() && dma.clock >= 0) {
       dmaTransferStep();
     }
   }
+}
+
+//The recompiler runs a whole block before RSP::main advances the DMA, so a
+//poll of SP_STATUS inside the block saw a transfer that had already finished
+//as busy, and looped once more than the interpreter (about 15 clocks per DMA).
+//SP register accesses advance the DMA to the current clock first.
+auto RSP::dmaSync() -> void {
+  s64 elapsed = Thread::clock - dmaSyncClock;
+  dmaSyncClock = Thread::clock;
+  if(elapsed > 0) dmaStep(elapsed);  //not after CPU::synchronize rebased the clock
 }
 
 auto RSP::dmaTransferStart(Thread& thread) -> void {
@@ -26,11 +39,12 @@ auto RSP::dmaTransferStart(Thread& thread) -> void {
     dma.current = dma.pending;
     dma.busy    = dma.full;
     dma.full    = {0,0};
-    dmaQueue(DmaSetupClocks + dmaRowClocks(dma.current.length, dma.busy.write), thread);
+    dmaQueue(max(DmaMinClocks, DmaSetupClocks + dmaRowClocks(dma.current.length, dma.busy.write)), thread);
   }
 }
 
 auto RSP::dmaTransferStep() -> void {
+  s64 overshoot = dma.clock;  //time since this row finished: the next row or transfer started then
   if(dma.busy.read) {
     if constexpr(Accuracy::RSP::Recompiler) {
       if(dma.current.pbusRegion) {
@@ -73,10 +87,11 @@ auto RSP::dmaTransferStep() -> void {
   if(dma.current.count) {
     dma.current.count -= 1;
     dma.current.dramAddress += dma.current.skip;
-    dmaQueue(dmaRowClocks(dma.current.length, dma.busy.write), *this);
+    dma.clock = overshoot - (s64)dmaRowClocks(dma.current.length, dma.busy.write);
   } else {
     dma.busy = {0,0};
     dma.current.length = 0xFF8;
     dmaTransferStart(*this);
+    if(dma.busy.any()) dma.clock += overshoot;
   }
 }
