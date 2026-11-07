@@ -157,10 +157,35 @@ auto CPU::Profiler::frame() -> void {
   if(written) return;
   if(!vi.active()) return;  //while the VI is off, ares reports arbitrary refreshes; only count real frames
   frames++;
-  instant(TrackFrames, label("frame"), now(), frames);
-  instant(TrackRDP, label("RDP submits per frame"), now(), rdpFrameSubmits);
-  instant(TrackRDP, label("RDP command bytes per frame"), now(), rdpFrameBytes);
+  s64 t = now();
+  instant(TrackFrames, label("frame"), t, frames);
+  instant(TrackRDP, label("RDP submits per frame"), t, rdpFrameSubmits);
+  instant(TrackRDP, label("RDP command bytes per frame"), t, rdpFrameBytes);
   rdpFrameSubmits = rdpFrameBytes = 0;
+
+  //exact busy % of the VI frame that just ended, drawn from its start (the spans include merge gaps)
+  if(rspDmaBusy) dmaMeter.add(max(rspDmaStart, dmaMeteredUntil), t), dmaMeteredUntil = t;
+  if(s64 length = t - frameStartTime; length > 0) {
+    if(rdp.timing.enabled) instant(TrackCounter, label("RDP busy %"), frameStartTime, 100.0 * rdpMeter.take(t) / length);
+    instant(TrackCounter, label("SP DMA busy %"), frameStartTime, 100.0 * dmaMeter.take(t) / length);
+  }
+  frameStartTime = t;
+
+  //a new framebuffer origin is a new frame shown; interlaced modes also move the origin
+  //by one line every field, which is not a new frame
+  u32 origin = vi.io.dramAddress;
+  if(!haveOrigin) {
+    haveOrigin = true;
+    lastOrigin = origin;
+  } else if(origin != lastOrigin) {
+    u32 line = (u32)vi.io.width * (vi.io.colorDepth == 3 ? 4 : 2);
+    u32 delta = origin > lastOrigin ? origin - lastOrigin : lastOrigin - origin;
+    if(!(vi.io.serrate && delta == line)) {
+      instant(TrackSwap, label("frame shown"), t, lastSwapFrame ? frames - lastSwapFrame : 0);
+      lastSwapFrame = frames;
+    }
+    lastOrigin = origin;
+  }
   if(skipFrames && frames == skipFrames) {
     clearCosts();
     printf("[profiler] skipped %llu frames, now recording\n", (unsigned long long)skipFrames);
@@ -571,7 +596,7 @@ auto CPU::Profiler::span(u32 track, u32 label, s64 start, s64 end) -> void {
   spans.push_back({track, label, start, end});
 }
 
-auto CPU::Profiler::instant(u32 track, u32 label, s64 time, u32 value) -> void {
+auto CPU::Profiler::instant(u32 track, u32 label, s64 time, double value) -> void {
   if(written) return;
   if(spans.size() + instants.size() >= MaxTimelineEvents) {
     if(!droppedEvents++) timelineFullAt = time;
@@ -594,6 +619,15 @@ auto CPU::Profiler::clearTimeline() -> void {
   threadStart = t;
   rspStart = t;
   rspDmaStart = t;
+  rdpMeter = {};
+  dmaMeter = {};
+  dmaMeteredUntil = t;
+  frameStartTime = t;
+  haveOrigin = false;
+  lastSwapFrame = 0;
+  resumedOf.clear();
+  yieldedLabel = prevRspLabel = lastRspLabel = ~0u;
+  prevRspEnd = lastRspEnd = lastRspStart = t;
 }
 
 //close spans still open when the profile is written
@@ -617,15 +651,20 @@ auto CPU::Profiler::exactSymbol(u32 address) const -> const std::string* {
 }
 
 //libultra's osSpTaskLoad copies the OSTask to the end of DMEM (0xfc0) before the RSP starts:
-//  +0x00 type (1 = gfx, 2 = audio, ...), +0x10 ucode (physical address)
+//  +0x00 type (1 = gfx, 2 = audio, ...), +0x04 flags (bit 0: OS_TASK_YIELDED, a resumed task),
+//  +0x10 ucode (physical address)
 //anything else (libdragon rspq, custom microcode) is named by a hash of IMEM
-auto CPU::Profiler::rspTaskName() -> std::string {
+auto CPU::Profiler::rspTaskName(bool& libultra, bool& resumed) -> std::string {
   //DMEM is stored big-endian; read it directly to skip the debugger hook in RSP::Writable::read
   auto dmem = [&](u32 address) -> u32 { return bswap32(*(u32*)&rsp.dmem.data[address & rsp.dmem.maskWord]); };
   u32 type = dmem(0xfc0);
+  u32 flags = dmem(0xfc4);
   u32 ucode = dmem(0xfd0);
   char buffer[96];
+  libultra = resumed = false;
   if(type >= 1 && type <= 7 && ucode && (ucode & 0x1fff'ffff) < 0x0080'0000) {
+    libultra = true;
+    resumed = flags & 1;
     static const char* types[] = {"", "gfx", "audio", "video", "jpeg", "task5", "task6", "hvq"};
     u32 vaddr = 0x8000'0000 | (ucode & 0x1fff'ffff);
     if(auto symbol = exactSymbol(vaddr)) {
@@ -647,9 +686,33 @@ auto CPU::Profiler::rspPoll(s64 rspClock) -> void {
   if(running != rspRunning) {
     if(running) {
       rspStart = t;
-      rspLabel = label(rspTaskName());
+      bool libultra = false, resumed = false;
+      u32 task = label(rspTaskName(libultra, resumed));
+      if(!libultra) {
+        //no OSTask: a task that runs again right after a different task cut in (within 0.5 ms each way)
+        resumed = lastRspLabel != task && prevRspLabel == task
+               && lastRspStart - prevRspEnd < 93750 && t - lastRspEnd < 93750;
+      }
+      //a libultra task that halted with SP_STATUS_YIELDED is resumed by the next load of the same task
+      //(other tasks, such as audio, usually run in between)
+      if(task == yieldedLabel) resumed = true, yieldedLabel = ~0u;
+      rspLabel = task;
+      if(resumed) {
+        rspLabel = label(labels[task] + " (resumed)");
+        resumedOf[rspLabel] = task;
+      }
+      prevRspLabel = lastRspLabel, prevRspEnd = lastRspEnd;
+      lastRspLabel = task, lastRspStart = t;
+      rspTaskLibultra = libultra;
     } else {
       span(TrackRSP, rspLabel, rspStart, t);
+      lastRspEnd = t;
+      //libultra's SP_STATUS_YIELDED (signal 1): the task saved its state and stopped early
+      //(other microcode, such as libdragon's rspq, uses the signals for its own purposes)
+      if(rspTaskLibultra && rsp.status.signal[1]) {
+        auto it = resumedOf.find(rspLabel);
+        yieldedLabel = it != resumedOf.end() ? it->second : rspLabel;
+      }
     }
     rspRunning = running;
   }
@@ -660,8 +723,9 @@ auto CPU::Profiler::rspPoll(s64 rspClock) -> void {
       rspDmaLabel = label("SP DMA");
     } else {
       rspDmaBusyClocks += t - rspDmaStart;
+      dmaMeter.add(max(rspDmaStart, dmaMeteredUntil), t);
       //back-to-back DMAs (microcode streaming) merge into one span: 2000 clocks is about 10 us
-      if(lastDmaSpan >= 0 && spans[lastDmaSpan].label == rspDmaLabel && rspDmaStart - spans[lastDmaSpan].end < 2000) {
+      if(lastDmaSpan >= 0 && spans[lastDmaSpan].label == rspDmaLabel && rspDmaStart - spans[lastDmaSpan].end < MergeGap) {
         spans[lastDmaSpan].end = t;
       } else {
         size_t before = spans.size();
@@ -683,8 +747,9 @@ auto CPU::Profiler::rdpBusy(s64 start, s64 end) -> void {
   if(written || end <= start) return;
   s64 t0 = clockBase + start, t1 = clockBase + end;
   rdpBusyClocks += t1 - t0;
+  rdpMeter.add(t0, t1);
   //back-to-back submits merge into one span
-  if(lastRdpSpan >= 0 && t0 - spans[lastRdpSpan].end < 2000) {
+  if(lastRdpSpan >= 0 && t0 - spans[lastRdpSpan].end < MergeGap) {
     spans[lastRdpSpan].end = t1;
     return;
   }
@@ -714,6 +779,7 @@ auto CPU::Profiler::writeTrace() -> void {
     fprintf(fp, ",\n{\"ph\":\"M\",\"pid\":1,\"tid\":%u,\"name\":\"thread_sort_index\",\"args\":{\"sort_index\":%u}}", tid, order);
   };
   track(TrackFrames, "VI frames", 0);
+  track(TrackSwap, "Frames shown (VI origin changes)", 1);
   for(u32 n = 0; n < stacks.size(); n++) track(TrackThreadBase + n, "CPU " + threadName(n), 10 + n);
   track(TrackRSP, "RSP", 1000);
   track(TrackRSPDMA, "SP DMA", 1001);
@@ -724,12 +790,12 @@ auto CPU::Profiler::writeTrace() -> void {
       s.track, escape(name).c_str(), us(s.start), us(s.end) - us(s.start));
   }
   for(auto& i : instants) {
-    if(i.track == TrackRDP) {  //counter track
-      fprintf(fp, ",\n{\"ph\":\"C\",\"pid\":1,\"name\":\"%s\",\"ts\":%.3f,\"args\":{\"value\":%u}}",
+    if(i.track == TrackRDP || i.track == TrackCounter) {  //counter track
+      fprintf(fp, ",\n{\"ph\":\"C\",\"pid\":1,\"name\":\"%s\",\"ts\":%.3f,\"args\":{\"value\":%.6g}}",
         escape(labels[i.label]).c_str(), us(i.time), i.value);
       continue;
     }
-    fprintf(fp, ",\n{\"ph\":\"i\",\"s\":\"t\",\"pid\":1,\"tid\":%u,\"name\":\"%s\",\"ts\":%.3f,\"args\":{\"value\":%u}}",
+    fprintf(fp, ",\n{\"ph\":\"i\",\"s\":\"t\",\"pid\":1,\"tid\":%u,\"name\":\"%s\",\"ts\":%.3f,\"args\":{\"value\":%.0f}}",
       i.track, escape(labels[i.label]).c_str(), us(i.time), i.value);
   }
   fprintf(fp, "\n]}\n");
@@ -741,37 +807,85 @@ auto CPU::Profiler::writeTimelineSummary(FILE* fp) -> void {
   s64 fullRun = now();
   s64 total = droppedEvents && timelineFullAt > 0 ? timelineFullAt : fullRun;
   if(total <= 0) return;
-  struct Row { std::string name; u64 count = 0; s64 busy = 0, longest = 0; };
+  //a yielded task and its resumptions count as one task; "longest" is the longest whole task (RSP time only)
+  struct Row { u32 label; u64 count = 0, yields = 0; s64 busy = 0, longest = 0, current = 0; };
   std::vector<Row> rows;
-  auto row = [&](const std::string& name) -> Row& {
-    for(auto& r : rows) if(r.name == name) return r;
-    rows.push_back({name});
+  auto row = [&](u32 label) -> Row& {
+    for(auto& r : rows) if(r.label == label) return r;
+    rows.push_back({label});
     return rows.back();
   };
   s64 rspBusy = 0;
   for(auto& s : spans) {
+    if(s.track != TrackRSP) continue;
     s64 d = s.end - s.start;
-    if(s.track == TrackRSP) {
-      rspBusy += d;
-      auto& r = row(labels[s.label]);
-      r.count++; r.busy += d; r.longest = max(r.longest, d);
+    rspBusy += d;
+    auto it = resumedOf.find(s.label);
+    if(it != resumedOf.end() && !rows.empty()) {
+      auto& r = row(it->second);
+      if(r.count) { r.yields++; r.busy += d; r.current += d; r.longest = max(r.longest, r.current); continue; }
     }
+    auto& r = row(it != resumedOf.end() ? it->second : s.label);  //a resumption with no start recorded counts as a task
+    r.count++; r.busy += d; r.current = d; r.longest = max(r.longest, d);
   }
   std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.busy > b.busy; });
   u64 frameCount = 0;
   for(auto& i : instants) if(i.track == TrackFrames) frameCount++;
   auto ms = [](s64 clocks) { return clocks / 187500.0; };
+
+  //frames shown (VI origin changes); the first one has no previous frame to measure from
+  std::vector<s64> frameTimes;
+  std::vector<u32> frameVIs;
+  s64 lastShown = -1;
+  u64 shown = 0;
+  for(auto& i : instants) {
+    if(i.track != TrackSwap) continue;
+    shown++;
+    if(lastShown >= 0 && i.value > 0) frameTimes.push_back(i.time - lastShown), frameVIs.push_back((u32)i.value);
+    lastShown = i.time;
+  }
+  if(!frameTimes.empty()) {
+    auto pct = [](auto v, double p) { std::sort(v.begin(), v.end()); return v[(size_t)(p * (v.size() - 1) + 0.5)]; };
+    s64 sum = 0; u64 viSum = 0;
+    for(auto t : frameTimes) sum += t;
+    for(auto v : frameVIs) viSum += v;
+    double avg = ms(sum) / frameTimes.size();
+    fprintf(fp, "\nFrames shown: %llu (VI origin changes) over %llu VI frames: %.2f fps\n",
+      (unsigned long long)shown, (unsigned long long)frameCount, 1000.0 / avg);
+    fprintf(fp, "  frame time ms: avg %.2f, median %.2f, p90 %.2f; VIs per frame: avg %.2f, median %u, p90 %u\n",
+      avg, ms(pct(frameTimes, 0.5)), ms(pct(frameTimes, 0.9)),
+      (double)viSum / frameVIs.size(), pct(frameVIs, 0.5), pct(frameVIs, 0.9));
+    std::vector<u64> histogram;
+    for(auto v : frameVIs) {
+      if(v >= histogram.size()) histogram.resize(v + 1);
+      histogram[v]++;
+    }
+    fprintf(fp, "  VIs per frame:");
+    for(u32 v = 0; v < histogram.size(); v++) {
+      if(histogram[v]) fprintf(fp, "  %u: %llu (%.1f%%)", v, (unsigned long long)histogram[v], 100.0 * histogram[v] / frameVIs.size());
+    }
+    fprintf(fp, "\n");
+  } else {
+    fprintf(fp, "\nFrames shown: %llu (VI origin changes) over %llu VI frames\n", (unsigned long long)shown, (unsigned long long)frameCount);
+  }
+
   fprintf(fp, "\nRSP: busy %.2f%% (%.3f ms of %.3f ms), SP DMA busy %.2f%%%s, %llu frames recorded\n",
     100.0 * rspBusy / total, ms(rspBusy), ms(total), 100.0 * rspDmaBusyClocks / fullRun,
     droppedEvents ? " (full run)" : "", (unsigned long long)frameCount);
-  fprintf(fp, "%7s %10s %12s %12s %12s %10s  %s\n", "busy%", "tasks", "total ms", "avg ms", "longest ms", "per frame", "RSP task");
+  fprintf(fp, "%7s %10s %8s %12s %12s %12s %10s  %s\n", "busy%", "tasks", "yields", "total ms", "avg ms", "longest ms", "per frame", "RSP task");
   for(auto& r : rows) {
-    fprintf(fp, "%6.2f%% %10llu %12.3f %12.4f %12.4f %10.2f  %s\n",
-      100.0 * r.busy / total, (unsigned long long)r.count, ms(r.busy), ms(r.busy) / r.count, ms(r.longest),
-      frameCount ? (double)r.count / frameCount : 0.0, r.name.c_str());
+    fprintf(fp, "%6.2f%% %10llu %8llu %12.3f %12.4f %12.4f %10.2f  %s\n",
+      100.0 * r.busy / total, (unsigned long long)r.count, (unsigned long long)r.yields, ms(r.busy),
+      r.count ? ms(r.busy) / r.count : 0.0, ms(r.longest),
+      frameCount ? (double)r.count / frameCount : 0.0, labels[r.label].c_str());
   }
+  fprintf(fp, "  (a task that yields to another and resumes counts once; avg and longest are per whole task;\n"
+              "   per frame is tasks per VI frame)\n");
   if(rdp.timing.enabled) fprintf(fp, "\nRDP: busy %.2f%% (%.3f ms of %.3f ms, estimated by the RDP timing model)\n",
     100.0 * rdpBusyClocks / fullRun, ms(rdpBusyClocks), ms(fullRun));
+  fprintf(fp, "note: in the trace, RDP and SP DMA spans less than %lld clocks (%.1f us) apart are drawn as one span,\n"
+              "  so span lengths include those gaps; the busy %% above and the \"RDP busy %%\" / \"SP DMA busy %%\"\n"
+              "  counter tracks (per VI frame) are exact\n", (long long)MergeGap, MergeGap / 187.5);
   if(droppedEvents) fprintf(fp, "warning: timeline full after %.3f ms; %llu later events dropped, figures above cover the recorded part only\n",
     ms(timelineFullAt), (unsigned long long)droppedEvents);
 }

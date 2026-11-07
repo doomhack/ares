@@ -124,10 +124,42 @@ struct Profiler {
   auto threadName(u32 stack) const -> std::string;
 
   //timeline: busy spans and instant markers, in 187.5 MHz scheduler clocks
-  enum : u32 { TrackFrames = 0, TrackRSP = 1, TrackRSPDMA = 2, TrackRDP = 3, TrackThreadBase = 100 };
+  enum : u32 { TrackFrames = 0, TrackRSP = 1, TrackRSPDMA = 2, TrackRDP = 3, TrackSwap = 4, TrackCounter = 5, TrackThreadBase = 100 };
   static constexpr u64 MaxTimelineEvents = 20'000'000;
+  static constexpr s64 MergeGap = 2000;  //RDP / SP DMA spans closer than this (about 10.7 us) are drawn as one
   struct Span { u32 track; u32 label; s64 start; s64 end; };
-  struct Instant { u32 track; u32 label; s64 time; u32 value; };
+  struct Instant { u32 track; u32 label; s64 time; double value; };  //TrackRDP and TrackCounter instants are counters
+
+  //exact busy time per VI frame from busy intervals that may be reported late or reach into the future
+  struct BusyMeter {
+    std::vector<std::pair<s64, s64>> pending;
+    auto add(s64 start, s64 end) -> void { if(end > start) pending.push_back({start, end}); }
+    auto take(s64 until) -> s64 {  //busy time before until not yet counted; keeps the rest
+      s64 sum = 0;
+      for(auto& p : pending) {
+        s64 e = p.second < until ? p.second : until;
+        if(e > p.first) sum += e - p.first, p.first = e;
+      }
+      std::erase_if(pending, [](auto& p) { return p.first >= p.second; });
+      return sum;
+    }
+  };
+  BusyMeter rdpMeter, dmaMeter;
+  s64 dmaMeteredUntil = 0;  //the part of an open SP DMA already given to dmaMeter
+  s64 frameStartTime = 0;   //time of the previous VI frame, for the per-frame counters
+
+  //frames shown: VI origin changes, sampled once per VI frame
+  u32 lastOrigin = 0;
+  u64 lastSwapFrame = 0;
+  bool haveOrigin = false;
+
+  //RSP yields: a yielded task resumes later as a span labelled "<task> (resumed)"
+  std::unordered_map<u32, u32> resumedOf;  //"(resumed)" label -> task label
+  u32 yieldedLabel = ~0u;                  //label of the last task that halted with SP_STATUS_YIELDED
+  u32 prevRspLabel = ~0u;                  //label of the RSP span before the last one
+  s64 prevRspEnd = 0, lastRspEnd = 0, lastRspStart = 0;
+  u32 lastRspLabel = ~0u;
+  bool rspTaskLibultra = false;
   std::vector<Span> spans;
   std::vector<Instant> instants;
   std::vector<std::string> labels;
@@ -146,11 +178,11 @@ struct Profiler {
   auto now() const -> s64 { return clockBase + self.Thread::clock; }
   auto label(const std::string& name) -> u32;
   auto span(u32 track, u32 label, s64 start, s64 end) -> void;
-  auto instant(u32 track, u32 label, s64 time, u32 value = 0) -> void;
+  auto instant(u32 track, u32 label, s64 time, double value = 0) -> void;
   auto clearTimeline() -> void;
   auto closeTimeline() -> void;
   auto exactSymbol(u32 address) const -> const std::string*;
-  auto rspTaskName() -> std::string;
+  auto rspTaskName(bool& libultra, bool& resumed) -> std::string;
   auto rspPoll(s64 rspClock) -> void;  //called from RSP::main
   auto rdpSubmit(s64 threadClock, u32 bytes) -> void;  //called on DPC_END writes
   auto rdpBusy(s64 start, s64 end) -> void;  //estimated work, from the RDP timing model
