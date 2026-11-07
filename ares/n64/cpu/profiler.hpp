@@ -129,6 +129,10 @@ struct Profiler {
   std::vector<std::string> labels;
   std::vector<std::pair<u32, std::string>> exactSymbols;  //every named symbol, for naming microcode blobs
   u64 droppedEvents = 0;
+  s64 timelineFullAt = -1;  //time of the first dropped event
+  s64 lastDmaSpan = -1;     //index of the last SP DMA span, for coalescing
+  s64 rspDmaBusyClocks = 0; //true SP DMA busy time: coalesced spans also cover the gaps between DMAs
+  u64 rdpFrameSubmits = 0, rdpFrameBytes = 0;
   bool rspRunning = false, rspDmaBusy = false;
   s64 rspStart = 0, rspDmaStart = 0, threadStart = 0;
   u32 rspLabel = 0, rspDmaLabel = 0;
