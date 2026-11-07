@@ -1072,7 +1072,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FADD_S, imm(Fdn), imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fdn, {Fsn, Ftn}, FpuWidth32, (3 - 1) * 2,
+      Fdn, {Fsn, Ftn}, FpuWidth32, (2 - 1) * 2,
       FpuCheckSnan,
       fpuDiv0Mask | fpuOverflowMask | fpuUnderflowMask | fpuInexactMask,
       [&]() -> void {
@@ -1089,7 +1089,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FSUB_S, imm(Fdn), imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fdn, {Fsn, Ftn}, FpuWidth32, (3 - 1) * 2,
+      Fdn, {Fsn, Ftn}, FpuWidth32, (2 - 1) * 2,
       FpuCheckSnan,
       fpuDiv0Mask | fpuOverflowMask | fpuUnderflowMask | fpuInexactMask,
       [&]() -> void {
@@ -1383,7 +1383,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_F_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareUnordered, FpuCompareFalse
     );
   }
@@ -1396,7 +1396,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_UN_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareUnordered, FpuCompareFalse
     );
   }
@@ -1409,7 +1409,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_EQ_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareUnordered, FpuCompareEq
     );
   }
@@ -1422,7 +1422,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_UEQ_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareUnordered, FpuCompareEq
     );
   }
@@ -1435,7 +1435,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_OLT_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareUnordered, FpuCompareLt
     );
   }
@@ -1448,7 +1448,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_ULT_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareUnordered, FpuCompareLt
     );
   }
@@ -1461,7 +1461,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_OLE_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareUnordered, FpuCompareLe
     );
   }
@@ -1474,7 +1474,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_ULE_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareUnordered, FpuCompareLe
     );
   }
@@ -1487,7 +1487,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_SF_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareOrdered, FpuCompareFalse
     );
   }
@@ -1500,7 +1500,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_NGLE_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareOrdered, FpuCompareFalse
     );
   }
@@ -1513,7 +1513,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_SEQ_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareOrdered, FpuCompareEq
     );
   }
@@ -1526,7 +1526,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_NGL_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareOrdered, FpuCompareEq
     );
   }
@@ -1539,7 +1539,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_LT_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::Linear;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareOrdered, FpuCompareLt
     );
   }
@@ -1552,7 +1552,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_NGE_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareOrdered, FpuCompareLt
     );
   }
@@ -1565,7 +1565,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_LE_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareOrdered, FpuCompareLe
     );
   }
@@ -1578,7 +1578,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_NGT_S, imm(Fsn), imm(Ftn));
         return EmitExecuteResult::Linear;
       },
-      Fsn, Ftn, FpuWidth32, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth32, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareOrdered, FpuCompareLe
     );
   }
@@ -1629,7 +1629,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FMUL_D, imm(Fdn), imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fdn, {Fsn, Ftn}, FpuWidth64, (8 - 1) * 2,
+      Fdn, {Fsn, Ftn}, FpuWidth64, (2 - 1) * 2,
       FpuCheckSnan,
       fpuDiv0Mask | fpuOverflowMask | fpuUnderflowMask | fpuInexactMask,
       [&]() -> void {
@@ -1906,7 +1906,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_F_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareUnordered, FpuCompareFalse
     );
   }
@@ -1919,7 +1919,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_UN_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareUnordered, FpuCompareFalse
     );
   }
@@ -1932,7 +1932,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_EQ_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareUnordered, FpuCompareEq
     );
   }
@@ -1945,7 +1945,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_UEQ_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareUnordered, FpuCompareEq
     );
   }
@@ -1958,7 +1958,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_OLT_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareUnordered, FpuCompareLt
     );
   }
@@ -1971,7 +1971,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_ULT_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareUnordered, FpuCompareLt
     );
   }
@@ -1984,7 +1984,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_OLE_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareUnordered, FpuCompareLe
     );
   }
@@ -1997,7 +1997,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_ULE_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareUnordered, FpuCompareLe
     );
   }
@@ -2010,7 +2010,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_SF_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareOrdered, FpuCompareFalse
     );
   }
@@ -2023,7 +2023,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_NGLE_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareOrdered, FpuCompareFalse
     );
   }
@@ -2036,7 +2036,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_SEQ_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareOrdered, FpuCompareEq
     );
   }
@@ -2049,7 +2049,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_NGL_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareOrdered, FpuCompareEq
     );
   }
@@ -2062,7 +2062,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_LT_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareOrdered, FpuCompareLt
     );
   }
@@ -2075,7 +2075,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_NGE_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareOrdered, FpuCompareLt
     );
   }
@@ -2088,7 +2088,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_LE_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 0,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 0,
       FpuCompareOrdered, FpuCompareLe
     );
   }
@@ -2101,7 +2101,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FC_NGT_D, imm(Fsn), imm(Ftn));
       return EmitExecuteResult::MayFault;
       },
-      Fsn, Ftn, FpuWidth64, (3 - 1) * 2, FpuCheckSnan | FpuCheckQnan, 1,
+      Fsn, Ftn, FpuWidth64, 0, FpuCheckSnan | FpuCheckQnan, 1,
       FpuCompareOrdered, FpuCompareLe
     );
   }

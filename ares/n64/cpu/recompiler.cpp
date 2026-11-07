@@ -754,7 +754,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
     if(unlikely(instruction == branchToSelf || instruction == jumpToSelf)) {
       instructionCycles = 64 * 2;
     }
-    if(isMulS(instruction) && !lastInstruction && isMulS(plan.instructions[idx + 1].instruction)) {
+    if(isMulS(instruction) && !lastInstruction && isMulSChain(instruction, plan.instructions[idx + 1].instruction)) {
       instructionCycles += 1 * 2;
     }
     emitDeferredCycles += instructionCycles;

@@ -196,7 +196,7 @@ auto CPU::instruction() -> bool {
   pipeline.begin();
   if(unlikely(profiler.enabled) && Profiler::isCallOrReturn(*data)) profiler.instruction(ipu.pc, *data);
   instructionPrologue(ipu.pc, *data);
-  if(unlikely(isMulS(*data)) && isMulS(readDebug<Word>(ipu.pc + 4))) step(1 * 2);
+  if(unlikely(isMulS(*data)) && isMulSChain(*data, readDebug<Word>(ipu.pc + 4))) step(1 * 2);
   decoderEXECUTE(*data);
   instructionEpilogue<0>();
   pipeline.end();

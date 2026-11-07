@@ -354,9 +354,15 @@ struct CPU : Thread {
   //extra scheduler clocks on each RDRAM access by the CPU while the RDP is busy
   s64 busContention = 0;
 
-  //MUL.S costs 2 cycles, plus 1 more when the next instruction is also a MUL.S
-  //(measured with dependent chains in tools/n64calib)
+  //MUL.S costs 2 cycles, plus 1 more when the next instruction is a MUL.S that
+  //reads its result. tools/n64calib v3.1 on hardware: 8 dependent MUL.S per
+  //iteration take 26 cycles (fmul_b2b), two interleaved chains take 19 (fmul_pair).
   static auto isMulS(u32 instruction) -> bool { return (instruction & 0xffe0003f) == 0x46000002; }
+  static auto isMulSChain(u32 first, u32 next) -> bool {
+    if(!isMulS(first) || !isMulS(next)) return false;
+    u32 fd = first >> 6 & 31;
+    return fd == (next >> 11 & 31) || fd == (next >> 16 & 31);
+  }
 
   //measured on hardware (tools/n64calib), in scheduler clocks (2 per CPU cycle).
   //The write figure is the average for a store every 5 instructions: the write
