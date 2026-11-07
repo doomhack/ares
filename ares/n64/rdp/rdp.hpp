@@ -81,9 +81,9 @@ struct RDP : Thread, Memory::RCP<RDP> {
   struct Timing {
     static constexpr u32 FullQueue = 8;
 
-    auto pixelCost() const -> double;
-    auto pixelBytes() const -> double;
-    auto draw(u32 rows, u32 pixels, double rowCost) -> void;
+    auto pixelCost(bool withZ = true) const -> double;
+    auto pixelBytes(bool withZ = true) const -> double;
+    auto draw(u32 rows, u32 pixels, double rowCost, double pixelScale = 1.0) -> void;
     auto triangle(const u64* words) -> void;
     auto rectangle(u64 word) -> void;
     auto load(double loadBytes) -> void;
@@ -133,6 +133,8 @@ struct RDP : Thread, Memory::RCP<RDP> {
     //totals since the RDP was last idle, for the RDRAM contention estimate
     double burstWork = 0;
     double burstBytes = 0;
+    double busRate = 0;     //RDRAM use while busy, 1.0 at full rate (not serialized)
+    double viSlowdown = 0;  //from the VI, for the submit being walked
   } timing;
 
   //serialization.cpp

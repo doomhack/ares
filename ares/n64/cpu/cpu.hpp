@@ -351,8 +351,16 @@ struct CPU : Thread {
   template<u32 Dir, u32 Size> auto devirtualize(u64 vaddr, bool raiseAlignedError = true, bool raiseExceptions = true) -> PhysAccess;
   auto devirtualizeDebug(u64 vaddr) -> u64;
 
-  //extra scheduler clocks on each RDRAM access by the CPU while the RDP is busy
+  //extra scheduler clocks on each RDRAM access by the CPU: the RDP's share while
+  //it is busy (rdpContention) plus the VI's share for a cache fill (viFill).
+  //Cache fills, also from the recompiler, pay busContention; writebacks and
+  //uncached accesses pay the VI more (viWriteBack, viUncached instead of viFill).
   s64 busContention = 0;
+  s64 rdpContention = 0;
+  s64 viFill = 0;
+  s64 viWriteBack = 0;
+  s64 viUncached = 0;
+  auto updateBusContention() -> void { busContention = rdpContention + viFill; }
 
   //MUL.S costs 2 cycles, plus 1 more when the next instruction is a MUL.S that
   //reads its result. tools/n64calib v3.1 on hardware: 8 dependent MUL.S per

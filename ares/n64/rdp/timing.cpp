@@ -3,29 +3,48 @@
 //that time visible through DPC_STATUS, DPC_CURRENT, the DPC counters, the DP
 //interrupt and RDRAM contention. ARES_N64_RDP_TIMING=0 turns it off.
 //
-//Constants are fitted to tools/n64calib on a real N64, in RDP clocks (62.5 MHz).
-//They were measured with the VI off, so scanout traffic is not included.
-//Per-primitive setup comes from fill rectangles: the RDP time of small triangles
-//could not be measured directly because they are limited by the CPU and RSP.
+//Constants are fitted to tools/n64calib on a real N64, in RDP clocks (62.5 MHz),
+//without scanout (ROM v2 with the VI off, and v3.1 rows corrected for its
+//blanked VI, see VI::updateBusLoad). Per-primitive and per-row costs come from
+//v3.1's raw command lists, which the RSP does not touch, as clocks per primitive
+//(hardware, the VI share removed): fill triangles of 14/44/152/1080 pixels
+//71.5/130.7/262.8/1192.5, fill rectangles 8x8 119.1 and 32x32 804.0, 1-cycle
+//triangles of 36/1035 pixels 151.9/1570.8 and 8x8 rectangles 191.8. Rates per
+//pixel come from big primitives drawn through rdpq.
 namespace {
-  constexpr double PrimitiveSetup = 91.0;
+  constexpr double SetupFill      = 33.5;   //fill and copy mode
+  constexpr double SetupCycle     = 21.0;   //1-cycle and 2-cycle
   constexpr double OtherCommand   = 1.0;
-  constexpr double TriangleRow    = 7.7;
-  constexpr double RectangleRow   = 12.2;  //1-cycle and 2-cycle
-  constexpr double FillRow        = 6.4;
-  constexpr double CopyRow        = 8.3;
-  constexpr double Pixel1Cycle    = 1.0;
-  constexpr double Pixel2Cycle    = 1.985;
+  constexpr double TriangleRow    = 12.0;   //1-cycle and 2-cycle
+  constexpr double RectangleRow   = 14.3;   //1-cycle and 2-cycle: 13.6 untextured, 15.1 textured
+  constexpr double FillRow        = 6.4;    //rectangles and triangles
+  constexpr double CopyRow        = 9.0;
+  constexpr double Pixel1Cycle    = 0.975;
+  constexpr double Pixel2Cycle    = 1.96;
   constexpr double PixelBlend     = 1.15;   //added when reading the framebuffer
-  constexpr double PixelZUpdate   = 2.567;  //added for z compare and update
-  constexpr double PixelZCompare  = 1.28;   //not measured: half of compare and update
+  constexpr double PixelZUpdate   = 1.95;   //added for z compare and update
+  constexpr double PixelZCompare  = 1.30;   //added for z compare only
+  constexpr double PixelColor32   = 0.81;   //added in 1-cycle and 2-cycle to a 32-bit color image
   constexpr double PixelCopy      = 0.556;
   constexpr double PixelFill[4]   = {0.139, 0.278, 0.556, 1.131};  //by color image size
+  constexpr double FillTriangle   = 1.44;   //fill triangles pay this times PixelFill per pixel
   constexpr double LoadPerByte    = 0.504;
 
   //a full speed RDP fill delays each CPU cache fill by 13.5 cycles (in scheduler clocks here)
   constexpr double ContentionClocks = 27.0;
   constexpr double ContentionFullRate = 3.54;  //bytes per RDP clock at full speed
+  //1-cycle and 2-cycle color writes contend like 24% more bytes than they move
+  //(dlmiss_tri1 48.06 and dlmiss_texrect 48.08 cycles per miss, against 39.05 idle)
+  constexpr double ContentionColorBytes = 1.24;
+  //and z-buffer reads and writes like half their bytes (dlmiss_zbuf 45.43)
+  constexpr double ContentionZBytes = 1.0;
+  //with the VI scanning out, CPU-RDP contention grows by this per busLoad
+  //(dlmiss_fill32: 52.65 cycles per miss VI off, 54.68 at 320x240x16, 58.89 at 640x480x32)
+  constexpr double ContentionVI = 0.47;
+  //the VI slows memory-bound RDP work (fills 9.4% at 640x480x32, 2-cycle 0.2%):
+  //busSlowdown(1.9%, 7%), scaled from 0 at 1.3 color bytes per color clock to 1 at 2.0
+  constexpr double SlowdownRunning = 0.019;
+  constexpr double SlowdownPerLoad = 0.07;
 
   constexpr u8 commandLength[64] = {
     1, 1, 1, 1, 1, 1, 1, 1, 4, 6,12,14,12,14,20,22,
@@ -54,28 +73,39 @@ namespace {
   }
 }
 
-auto RDP::Timing::pixelCost() const -> double {
+auto RDP::Timing::pixelCost(bool withZ) const -> double {
   if(cycleType == 3) return PixelFill[colorSize];
   if(cycleType == 2) return PixelCopy;
   double cost = cycleType == 1 ? Pixel2Cycle : Pixel1Cycle;
+  if(colorSize == 3) cost += PixelColor32;
   if(imageRead) cost += PixelBlend;
+  if(!withZ) return cost;
   if(zCompare && zUpdate) cost += PixelZUpdate;
   else if(zCompare || zUpdate) cost += PixelZCompare;
   return cost;
 }
 
-auto RDP::Timing::pixelBytes() const -> double {
+auto RDP::Timing::pixelBytes(bool withZ) const -> double {
   double size = texelBytes[colorSize];
   if(cycleType >= 2) return size;
+  size *= ContentionColorBytes;
   if(imageRead) size *= 2;
-  if(zCompare) size += 2;
-  if(zUpdate) size += 2;
+  if(!withZ) return size;
+  if(zCompare) size += ContentionZBytes;
+  if(zUpdate) size += ContentionZBytes;
   return size;
 }
 
-auto RDP::Timing::draw(u32 rows, u32 pixels, double rowCost) -> void {
-  work += PrimitiveSetup + rows * rowCost + pixels * pixelCost();
-  bytes += pixels * pixelBytes();
+auto RDP::Timing::draw(u32 rows, u32 pixels, double rowCost, double pixelScale) -> void {
+  double pixelTime = pixels * pixelCost() * pixelScale;
+  double cost = (cycleType >= 2 ? SetupFill : SetupCycle) + rows * rowCost + pixelTime;
+  double moved = pixels * pixelBytes();
+  if(viSlowdown > 0 && pixels) {
+    double ramp = (pixelBytes(false) / (pixelCost(false) * pixelScale) - 1.3) / 0.7;
+    cost *= 1.0 + viSlowdown * (ramp < 0 ? 0 : ramp > 1 ? 1 : ramp);
+  }
+  work += cost;
+  bytes += moved;
 }
 
 //sum scanline spans from the edge coefficients, clipped to the scissor
@@ -99,9 +129,10 @@ auto RDP::Timing::triangle(const u64* words) -> void {
     if(right > scissorRight) right = scissorRight;
     if(right <= left) continue;
     rows++;
-    pixels += right - left;
+    pixels += right - left + (cycleType >= 2);  //fill and copy modes include the last column
   }
-  draw(rows, pixels, TriangleRow);
+  if(cycleType == 3) return draw(rows, pixels, FillRow, FillTriangle);
+  draw(rows, pixels, cycleType == 2 ? CopyRow : TriangleRow);
 }
 
 auto RDP::Timing::rectangle(u64 word) -> void {
@@ -118,7 +149,7 @@ auto RDP::Timing::rectangle(u64 word) -> void {
 }
 
 auto RDP::Timing::load(double loadBytes) -> void {
-  double cost = loadBytes * LoadPerByte;
+  double cost = loadBytes * LoadPerByte * (1.0 + viSlowdown);
   work += cost;
   bytes += loadBytes;
   tmemBusy += cost;
@@ -163,7 +194,8 @@ auto RDP::Timing::decode(const u64* words, u32 code, s64 start) -> void {
 auto RDP::timingPower() -> void {
   timing = {};
   timing.enabled = !timingDisabled();
-  cpu.busContention = 0;
+  cpu.rdpContention = 0;
+  cpu.updateBusContention();
 }
 
 auto RDP::timingBusy(s64 now) const -> bool {
@@ -180,6 +212,7 @@ auto RDP::timingSubmit(Thread& thread) -> void {
 
   timing.work = 0;
   timing.bytes = 0;
+  timing.viSlowdown = vi.busSlowdown(SlowdownRunning, SlowdownPerLoad);
   if(now >= timing.busyEnd) timing.burstWork = timing.burstBytes = 0;
   u32 begin = command.current, end = command.end;
   for(u32 address = begin; address < end; address += 8) {
@@ -205,7 +238,9 @@ auto RDP::timingSubmit(Thread& thread) -> void {
   timing.burstWork += timing.work;
   timing.burstBytes += timing.bytes;
   double rate = timing.burstWork > 0 ? timing.burstBytes / timing.burstWork / ContentionFullRate : 0;
-  cpu.busContention = (s64)(ContentionClocks * (rate < 1.0 ? rate : 1.0));
+  timing.busRate = rate < 1.0 ? rate : 1.0;
+  cpu.rdpContention = (s64)(ContentionClocks * timing.busRate * (1.0 + vi.busSlowdown(0.0, ContentionVI)));
+  cpu.updateBusContention();
   if(unlikely(cpu.profiler.enabled)) cpu.profiler.rdpBusy(start, finish);
 }
 
@@ -222,7 +257,11 @@ auto RDP::timingAdvance(s64 clocks) -> void {
 
 auto RDP::timingPoll() -> void {
   if(!timing.enabled) return;
-  if(timing.busyEnd <= 0) cpu.busContention = 0;
+  if(timing.busyEnd <= 0 && cpu.rdpContention) {
+    cpu.rdpContention = 0;
+    timing.busRate = 0;
+    cpu.updateBusContention();
+  }
   while(timing.fullCount && timing.fullQueue[0] <= 0) {
     s64 finished = timing.fullQueue[0];
     for(u32 n = 1; n < timing.fullCount; n++) timing.fullQueue[n - 1] = timing.fullQueue[n];

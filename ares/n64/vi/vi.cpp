@@ -83,6 +83,7 @@ auto VI::main() -> void {
         io.vcounter = 0;
         io.field += !io.halfLinesPerField.bit(0);
         if(++io.leapCounter == 5) io.leapCounter = 0;
+        updateBusLoad();
       }
 
       if(io.vcounter == io.vstart >> 1) {
@@ -126,6 +127,7 @@ auto VI::main() -> void {
       // We do that every 200 simulated lines of 0x800 quarter-clocks. This is just arbitrary,
       // the real VI is not clocking at all when inactive.
       io.vcounter = 0;
+      if(busActive) updateBusLoad();
       if(++inactiveCounter >= 200) {
         inactiveCounter = 0;
         refreshed = true;
@@ -133,6 +135,33 @@ auto VI::main() -> void {
       step(0x800);
     }
   }
+}
+
+//RDRAM contention from scanout, fitted to tools/n64calib v3.1 on hardware: the
+//suite with the VI off (ROM v2), blanked (v3.1 pass 1), scanning out 320x240
+//16-bit (pass 2) and 640x480 32-bit interlaced (pass 3, 4x the bytes of pass 2).
+//Slowdowns are affine in the bytes fetched: memory-bound rows lose about 1.8%
+//once the VI runs (even blanked: fill16_full 664709 -> 677155 ticks), and about
+//7% more per 640x480x32 field (689109 at 320x240x16, 727422 at 640x480x32).
+//Here the CPU's share, in scheduler clocks per access (2 per CPU cycle):
+//  D-cache miss 39.05 -> 39.71 / 40.12 / 40.74 cycles (dload_miss)
+//  dirty miss 70.50 -> 71.62 / 72.34 / 76.29 cycles (dstore_miss_wb)
+//  uncached load 36.02 -> 36.60 / 37.11 / 38.59, store 16.51 -> 16.85 / 17.12 / 18.72
+//  I-cache miss 51.2 -> 52.1 / 52.2 / 53.7 cycles per line (icache_miss)
+//The RDP, SP DMA and the CPU-RDP contention scale with busSlowdown too.
+auto VI::updateBusLoad() -> void {
+  busActive = active();
+  u32 bytes = 0;
+  if(busActive) {
+    u32 pixels = io.hend > io.hstart ? (u32)(io.hend - io.hstart) * io.xscale >> 10 : 0;
+    u32 lines = io.vend > io.vstart ? (u32)(io.vend - io.vstart) >> 1 : 0;
+    bytes = pixels * lines * (io.colorDepth == 3 ? 4 : 2);
+  }
+  busLoad = bytes / 614400.0;
+  cpu.viFill      = (s64)(busSlowdown(1.4, 2.0) + 0.5);
+  cpu.viWriteBack = (s64)(busSlowdown(0.0, 8.8) + 0.5);
+  cpu.viUncached  = (s64)(busSlowdown(1.2, 4.0) + 0.5);
+  cpu.updateBusContention();
 }
 
 auto VI::refresh() -> void {
@@ -231,6 +260,7 @@ auto VI::power(bool reset) -> void {
   io = {};
   refreshed = false;
   clockFraction = 0;
+  updateBusLoad();
 
   #if defined(VULKAN)
   gpuOutputValid = false;
