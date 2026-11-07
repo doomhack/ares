@@ -20,8 +20,9 @@
 //   dp_*    : RDP counters for that same run (62.5 MHz RDP clocks; 24-bit)
 //
 // Group-specific columns:
-//   raw     : RDP command lists written by the CPU and started with DP_START/DP_END
-//             (no RSP). dp_tmem holds the pixels one primitive wrote, read back.
+//   raw     : RDP command lists written by the CPU into RDRAM and run with rdpq_exec
+//             (the RSP only points the RDP at them). dp_tmem holds the pixels one
+//             primitive wrote, read back.
 //   bus     : a CPU loop timed while the RDP works through queued commands;
 //             dp_pipe is 1 if the RDP was still busy when the loop ended (valid).
 //   bus dma*: an RSP DMA loop timed on the RSP with DP_CLOCK; ticks = clock * 3/4.
@@ -119,7 +120,8 @@ static void dp_reset_counters(void)
                  DP_WSTATUS_RESET_TMEM_COUNTER | DP_WSTATUS_RESET_CMD_COUNTER;
 }
 
-#define SPIN_LIMIT 50000000u
+// every wait in this file is bounded: a TIMEOUT shows up in the results instead of a hang
+#define WAIT_LIMIT TICKS_FROM_MS(100)
 
 static void read_counters(meas_t *m)
 {
@@ -129,34 +131,21 @@ static void read_counters(meas_t *m)
     m->tmem   = *DP_TMEM_BUSY & 0xFFFFFF;
 }
 
-// starts the raw list with DP_START/DP_END and waits for its SYNC_FULL interrupt.
-// rdpq appends to its buffer by writing DP_END alone, so afterwards the RDP is
-// parked back at the end of rdpq's last submission (DP_START = DP_END = there),
-// or its next append would run everything in memory between the two.
+// Runs the raw list with rdpq_exec: the RSP points the RDP at it and back,
+// exactly as rdpq does for its own buffers, and rspq_wait returns when the RDP
+// has finished. (v3 wrote DP_START/DP_END from the CPU behind rspq's back,
+// which hung real hardware.) The empty list pays the same submission cost.
 static meas_t measure_raw(void)
 {
     meas_t m = {0};
-    uint32_t spin = 0;
-    disable_interrupts();
-    while ((*DP_STATUS & (DP_STATUS_START_VALID | DP_STATUS_END_VALID | DP_STATUS_BUSY | DP_STATUS_PIPE_BUSY | DP_STATUS_DMA_BUSY)) && ++spin < SPIN_LIMIT) {}
-    uint32_t rdpq_end = *DP_END;
-    *MI_MODE = MI_WMODE_CLR_DPINT;
-    *DP_STATUS = DP_WSTATUS_RESET_XBUS_DMEM_DMA | DP_WSTATUS_RESET_FREEZE | DP_WSTATUS_RESET_FLUSH;
+    rspq_wait();
     dp_reset_counters();
     uint32_t t0 = TICKS_READ();
-    *DP_START = PhysicalAddr(raw_list);
-    *DP_END   = PhysicalAddr(raw_list + raw_len);
-    spin = 0;
-    while (!(*MI_INTERRUPT & MI_INTERRUPT_DP) && ++spin < SPIN_LIMIT) {}
+    rdpq_exec(raw_list, raw_len * 8);
+    rspq_wait();
     uint32_t t1 = TICKS_READ();
     read_counters(&m);
-    *MI_MODE = MI_WMODE_CLR_DPINT;
-    uint32_t park = 0;
-    while ((*DP_STATUS & (DP_STATUS_START_VALID | DP_STATUS_END_VALID)) && ++park < SPIN_LIMIT) {}
-    *DP_START = rdpq_end;
-    *DP_END   = rdpq_end;
-    enable_interrupts();
-    m.ticks = spin >= SPIN_LIMIT ? 0xFFFFFFFF : t1 - t0;   // a timeout shows as 4294967295
+    m.ticks = t1 - t0;
     m.tmem = raw_pixels;
     return m;
 }
@@ -170,8 +159,8 @@ static meas_t measure_once(const test_t *t)
         t->setup();                         // queues the RDP work and flushes it
         data_cache_hit_writeback_invalidate(big_buf, sizeof(big_buf));
         if (!(t->flags & F_LEGACY)) {
-            uint32_t spin = 0;
-            while (!(*DP_STATUS & DP_STATUS_PIPE_BUSY) && ++spin < SPIN_LIMIT) {}
+            uint32_t w0 = TICKS_READ();
+            while (!(*DP_STATUS & DP_STATUS_PIPE_BUSY) && TICKS_READ() - w0 < WAIT_LIMIT) {}
         }
         dp_reset_counters();
         t0 = TICKS_READ();
@@ -219,10 +208,25 @@ static meas_t measure_once(const test_t *t)
 static void clear_zbuf(void);
 static void cal_rdp_tri_zbuf_big(uint32_t n);
 
+// Watchdog: every test finishes in well under a second, so one still running
+// after 4 s has hung. libdragon's assert screen sets up the display itself and
+// shows which test it was, with the RDP and RSP status.
+static timer_link_t watchdog;
+static void watchdog_fire(int ovfl)
+{
+    (void)ovfl;
+    const test_t *t = current_test;
+    assertf(0, "HUNG in pass %d: %s/%s\nDP_STATUS %08lx START %08lx END %08lx CURRENT %08lx\nSP_STATUS %08lx",
+        pass + 1, t ? t->group : "-", t ? t->name : "-",
+        UL(*DP_STATUS), UL(*DP_START), UL(*DP_END), UL(*DP_CURRENT), UL(*SP_STATUS));
+}
+
 static void run_test(const test_t *t)
 {
     if (pass > 0 && (t->flags & F_ONCE)) return;
     current_test = t;
+    debugf("CAL,run,%s,%s,%s\n", t->group, t->name, pass_tags[pass]);   // last line before a hang
+    start_timer(&watchdog, TIMER_TICKS(4000000), TF_ONE_SHOT, watchdog_fire);
     if (t->setup && t->kind != KIND_BUS && t->kind != KIND_RSPT) t->setup();
     if (t->kind != KIND_CPU) rspq_wait();
 
@@ -234,6 +238,7 @@ static void run_test(const test_t *t)
         if (m.ticks < best.ticks) best = m;
     }
     if (t->teardown) t->teardown();
+    stop_timer(&watchdog);
 
     debugf("CAL,%s,%s,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%s\n", t->group, t->name,
         UL(t->count), UL(t->units), UL(best.ticks), UL(best.clk), UL(best.cmdbuf), UL(best.pipe), UL(best.tmem),
@@ -390,10 +395,10 @@ static NOINLINE void cal_rdp_tri_flat32_big(uint32_t n) { for (uint32_t i = 0; i
 
 // ---------------------------------------------------------------- raw RDP command lists
 //
-// Built by the CPU and fed to the RDP with DP_START/DP_END, without the RSP, so
-// the RDP's own cost per primitive shows even for tiny primitives. Every list
-// starts with the same state commands and ends with SYNC_FULL; "empty" is that
-// alone, so (list - empty) / count is the cost of one primitive.
+// Built by the CPU in RDRAM and handed to the RDP with rdpq_exec, so the RSP
+// does no per-primitive work and the RDP's own cost per primitive shows even
+// for tiny primitives. Every list starts with the same state commands; "empty"
+// is that alone, so (list - empty) / count is the cost of one primitive.
 
 #define RDP_CMD(id)          ((uint64_t)(id) << 56)
 #define RAW_COLOR            0xF801F801u     // RGBA16 red, twice for fill mode
@@ -423,7 +428,6 @@ static void raw_begin(int one_cycle)
 
 static void raw_end(void)
 {
-    raw_put(RDP_CMD(0x29));                                               // SYNC_FULL
     raw_len = (raw_wp - (volatile uint32_t *)UncachedAddr(raw_list)) / 2;
 }
 
@@ -655,7 +659,7 @@ static void show_results(void)
         const page_t *pg = &pages[page];
         surface_t *disp = display_get();
         graphics_fill_screen(disp, 0);
-        snprintf(header, sizeof(header), "N64 calib ROM v3  page %d/%d  pass %d: %s",
+        snprintf(header, sizeof(header), "N64 calib ROM v3.1  page %d/%d  pass %d: %s",
             page + 1, num_pages, pg->pass + 1, pass_names[pg->pass]);
         graphics_draw_text(disp, 16, 2, header);
         graphics_draw_text(disp, 16, 14, "grp test               ticks   cyc/u    clock     pipe     tmem  A:next B:back");
@@ -689,13 +693,27 @@ int main(void)
     debug_init_usblog();
     debug_init_isviewer();
 
+    timer_init();
     rspq_init();
     rdpq_init();
     cal_ovl = rspq_overlay_register(&rsp_calib);
     init_surfaces();
 
-    debugf("CAL,begin,v3\n");
+    debugf("CAL,begin,v3.1\n");
     debugf("CAL,group,test,count,units,ticks,dp_clock,dp_cmdbuf,dp_pipe,dp_tmem,pass\n");
+
+    // boot splash, so it is clear the ROM started; pass 1 then runs with the VI off
+    display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_DISABLED);
+    surface_t *disp = display_get();
+    graphics_fill_screen(disp, 0);
+    graphics_draw_text(disp, 16, 16, "N64 calibration ROM v3.1");
+    graphics_draw_text(disp, 16, 32, "Pass 1 runs with the VI off:");
+    graphics_draw_text(disp, 16, 40, "the screen goes black for ~10 s.");
+    graphics_draw_text(disp, 16, 56, "Then a blue screen: passes 2, 3.");
+    graphics_draw_text(disp, 16, 64, "Then the results (4 pages).");
+    display_show(disp);
+    wait_ms(3000);
+    display_close();
 
     strcpy(pass_names[0], "VI off");
     run_pass(0);
