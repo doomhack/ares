@@ -1106,7 +1106,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FMUL_S, imm(Fdn), imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fdn, {Fsn, Ftn}, FpuWidth32, (5 - 1) * 2,
+      Fdn, {Fsn, Ftn}, FpuWidth32, (2 - 1) * 2,
       FpuCheckSnan,
       fpuDiv0Mask | fpuOverflowMask | fpuUnderflowMask | fpuInexactMask,
       [&]() -> void {

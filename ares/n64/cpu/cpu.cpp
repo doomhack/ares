@@ -132,6 +132,7 @@ auto CPU::synchronize() -> void {
   });
 
   stepCount((clocks - counted) >> 1);
+  countClock -= (clocks - counted) & 1;  //carry an odd half cycle into the next count
 }
 
 auto CPU::setInterruptPending(u32 bit, bool value) -> void {
@@ -193,6 +194,7 @@ auto CPU::instruction() -> bool {
   pipeline.begin();
   if(unlikely(profiler.enabled) && Profiler::isCallOrReturn(*data)) profiler.instruction(ipu.pc, *data);
   instructionPrologue(ipu.pc, *data);
+  if(unlikely(isMulS(*data)) && isMulS(readDebug<Word>(ipu.pc + 4))) step(1 * 2);
   decoderEXECUTE(*data);
   instructionEpilogue<0>();
   pipeline.end();

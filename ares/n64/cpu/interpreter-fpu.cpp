@@ -872,7 +872,7 @@ auto CPU::FMUL_S(u8 fd, u8 fs, u8 ft) -> void {
   CHECK_FPE(f32, ffd, ffs * fft);
   if(!fpuCheckOutput(ffd)) return;
   FD(f32) = ffd;
-  step((5 - 1) * 2);
+  step((2 - 1) * 2);  //see CPU::isMulS for the back-to-back case
 }
 
 auto CPU::FMUL_D(u8 fd, u8 fs, u8 ft) -> void {
