@@ -1,13 +1,19 @@
-//Configuration comes from environment variables so the profiler needs no UI:
+//The frontend (Tools > Profiler) arms the profiler with the "Profiler" option, which takes
+//effect at power on, and starts and stops captures through n64/profiler.hpp. A capture can
+//also be started on a game that was not armed: the profiler is then enabled mid-game, and
+//functions that were already running at that point are missing from the top of the call tree.
+//
+//Without the frontend, environment variables enable it and record from power on:
 //  ARES_N64_PROFILE_ELF=<path to game .elf>   enables profiling with symbols
 //  ARES_N64_PROFILE=1                         enables profiling without symbols
 //  ARES_N64_PROFILE_OUT=<path prefix>         output prefix (default: <elf>.profile or ares-n64.profile)
 //  ARES_N64_PROFILE_SKIP=<frames>             discard everything before this frame (skip boot)
 //  ARES_N64_PROFILE_FRAMES=<frames>           after this many frames: write output and quit ares
-//Output is written when the game is unloaded or reset:
+//With environment variables, output is written when the game is unloaded or reset:
 //  <prefix>.callgrind  (KCachegrind / QCachegrind)
 //  <prefix>.folded     (speedscope, flamegraph.pl, inferno)
 //  <prefix>.txt        (flat per-function table)
+//  <prefix>.trace.json (Perfetto / chrome://tracing)
 auto CPU::Profiler::configure() -> void {
   auto get = [](const char* name) -> std::string {
     #if defined(_MSC_VER)
@@ -19,28 +25,46 @@ auto CPU::Profiler::configure() -> void {
     return value ? std::string{value} : std::string{};
     #endif
   };
-  elfPath = get("ARES_N64_PROFILE_ELF");
+  auto envElf = get("ARES_N64_PROFILE_ELF");
   outputPath = get("ARES_N64_PROFILE_OUT");
-  enabled = !elfPath.empty() || get("ARES_N64_PROFILE") == "1";
-  skipFrames = std::strtoull(get("ARES_N64_PROFILE_SKIP").c_str(), nullptr, 10);
-  stopFrame = std::strtoull(get("ARES_N64_PROFILE_FRAMES").c_str(), nullptr, 10);
+  fromEnvironment = !envElf.empty() || get("ARES_N64_PROFILE") == "1";
+  skipFrames = fromEnvironment ? std::strtoull(get("ARES_N64_PROFILE_SKIP").c_str(), nullptr, 10) : 0;
+  stopFrame = fromEnvironment ? std::strtoull(get("ARES_N64_PROFILE_FRAMES").c_str(), nullptr, 10) : 0;
+  enabled = fromEnvironment || optionEnabled;
+  armedAtBoot = enabled;
+  frames = 0;
+  partial = false;
+  recording = false;
+  captured = false;
+  pendingEnable = pendingStart = false;
+  written = false;
+
+  auto elf = !envElf.empty() ? envElf : optionSymbols;
+  if(elf != elfPath || symbols.empty()) {
+    symbols.clear();
+    exactSymbols.clear();
+    runningThreadSymbol = 0;
+    entryPoint = 0;
+    elfPath.clear();
+    if(!elf.empty()) {
+      if(loadSymbols(elf)) {
+        elfPath = elf;
+        printf("[profiler] loaded %d symbols from %s\n", (int)symbols.size(), elf.c_str());
+      } else {
+        printf("[profiler] could not read symbols from %s\n", elf.c_str());
+      }
+    }
+  }
   if(!enabled) return;
   if(outputPath.empty()) outputPath = elfPath.empty() ? "ares-n64.profile" : elfPath + ".profile";
+  if(fromEnvironment) printf("[profiler] enabled, output prefix %s\n", outputPath.c_str());
+}
+
+auto CPU::Profiler::loadSymbols(const std::string& path) -> bool {
   symbols.clear();
   exactSymbols.clear();
   runningThreadSymbol = 0;
   entryPoint = 0;
-  if(!elfPath.empty()) {
-    if(loadSymbols(elfPath)) {
-      printf("[profiler] loaded %d symbols from %s\n", (int)symbols.size(), elfPath.c_str());
-    } else {
-      printf("[profiler] could not read symbols from %s\n", elfPath.c_str());
-    }
-  }
-  printf("[profiler] enabled, output prefix %s\n", outputPath.c_str());
-}
-
-auto CPU::Profiler::loadSymbols(const std::string& path) -> bool {
   std::ifstream file(path, std::ios::binary);
   if(!file) return false;
   std::vector<u8> elf((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -139,9 +163,65 @@ auto CPU::Profiler::reset() -> void {
   written = false;
   entered = false;
   stackOverflows = 0;
+  recording = false;
+  captured = false;
+  captureStartFrame = captureFrames = 0;
+  captureEnd = 0;
   clearTimeline();
   switchThread(0);
   last = counters();
+  //environment variables record from power on (ARES_N64_PROFILE_SKIP starts later)
+  if(fromEnvironment && !skipFrames) recording = true, captured = true;
+}
+
+//recording can start and stop at any time: the call stacks are tracked either way
+auto CPU::Profiler::start() -> bool {
+  if(written) return false;
+  if(!enabled) {
+    pendingEnable = pendingStart = true;
+    return true;
+  }
+  if(recording) return true;
+  charge();
+  recording = true;
+  captured = true;
+  clearCosts();
+  captureStartFrame = frames;
+  captureFrames = 0;
+  return true;
+}
+
+auto CPU::Profiler::stop() -> bool {
+  pendingStart = pendingEnable = false;
+  if(!enabled || !recording) return false;
+  charge();
+  closeTimeline();
+  captureEnd = now();
+  captureFrames = frames - captureStartFrame;
+  recording = false;
+  return true;
+}
+
+//Turning the hooks on needs recompiled code without them thrown away. This runs from
+//CPU::main, between frames, where no recompiled block is running.
+auto CPU::Profiler::applyPending() -> void {
+  if(pendingEnable) {
+    pendingEnable = false;
+    if(!enabled && !written) {
+      enabled = true;
+      partial = true;
+      entered = true;  //the program is already running
+      reset();
+      if constexpr(Accuracy::CPU::Recompiler) {
+        self.recompiler.allocator.release();
+        self.recompiler.reset();
+      }
+    }
+  }
+  if(pendingStart) {
+    pendingStart = false;
+    start();
+  }
 }
 
 auto CPU::Profiler::clearCosts() -> void {
@@ -150,6 +230,7 @@ auto CPU::Profiler::clearCosts() -> void {
   clockBase -= last.clocks;  //restart the clock at zero
   last.clocks = 0;
   eventCount = 0;
+  stackOverflows = 0;
   clearTimeline();
 }
 
@@ -157,6 +238,7 @@ auto CPU::Profiler::frame() -> void {
   if(written) return;
   if(!vi.active()) return;  //while the VI is off, ares reports arbitrary refreshes; only count real frames
   frames++;
+  if(recording) captureFrames = frames - captureStartFrame;
   s64 t = now();
   instant(TrackFrames, label("frame"), t, frames);
   instant(TrackRDP, label("RDP submits per frame"), t, rdpFrameSubmits);
@@ -164,8 +246,8 @@ auto CPU::Profiler::frame() -> void {
   rdpFrameSubmits = rdpFrameBytes = 0;
 
   //exact busy % of the VI frame that just ended, drawn from its start (the spans include merge gaps)
-  if(rspDmaBusy) dmaMeter.add(max(rspDmaStart, dmaMeteredUntil), t), dmaMeteredUntil = t;
-  if(s64 length = t - frameStartTime; length > 0) {
+  if(recording && rspDmaBusy) dmaMeter.add(max(rspDmaStart, dmaMeteredUntil), t), dmaMeteredUntil = t;
+  if(s64 length = t - frameStartTime; recording && length > 0) {
     if(rdp.timing.enabled) instant(TrackCounter, label("RDP busy %"), frameStartTime, 100.0 * rdpMeter.take(t) / length);
     instant(TrackCounter, label("SP DMA busy %"), frameStartTime, 100.0 * dmaMeter.take(t) / length);
   }
@@ -187,7 +269,7 @@ auto CPU::Profiler::frame() -> void {
     lastOrigin = origin;
   }
   if(skipFrames && frames == skipFrames) {
-    clearCosts();
+    start();
     printf("[profiler] skipped %llu frames, now recording\n", (unsigned long long)skipFrames);
   }
   if(stopFrame && frames == stopFrame) {
@@ -216,9 +298,8 @@ auto CPU::Profiler::top() -> u32 {
 
 auto CPU::Profiler::charge() -> void {
   auto now = counters();
-  nodes[top()].self += now - last;
+  if(recording) nodes[top()].self += now - last, eventCount++;
   last = now;
-  eventCount++;
 }
 
 auto CPU::Profiler::child(u32 parent, u32 func) -> u32 {
@@ -244,7 +325,7 @@ auto CPU::Profiler::call(u32 target, u32 returnAddress) -> void {
     stackOverflows++;
   }
   u32 node = child(top(), resolve(target));
-  nodes[node].calls++;
+  countCall(node);
   stack.frames.push_back({node, returnAddress});
 }
 
@@ -272,7 +353,7 @@ auto CPU::Profiler::tailCall(u32 target) -> void {
   charge();
   u32 parent = nodes[stack.frames.back().node].parent;
   u32 node = child(parent, resolve(target));
-  nodes[node].calls++;
+  countCall(node);
   stack.frames.back().node = node;
 }
 
@@ -361,7 +442,7 @@ auto CPU::Profiler::exceptionEnter() -> void {
   charge();
   stack.inException = true;
   u32 node = child(top(), FuncException);
-  nodes[node].calls++;
+  countCall(node);
   stack.frames.push_back({node, 0xffff'ffff});
 }
 
@@ -395,7 +476,7 @@ auto CPU::Profiler::resume(u32 target) -> void {
   //empty, which means a thread starting at its entry point
   if(stack.frames.empty() && isFunctionStart(target)) {
     u32 node = child(stack.root, resolve(target));
-    nodes[node].calls++;
+    countCall(node);
     stack.frames.push_back({node, 0xffff'ffff});
   }
 }
@@ -440,16 +521,75 @@ auto CPU::Profiler::nodeName(u32 node) const -> std::string {
   return name(nodes[node].func);
 }
 
+//final output when the game is unloaded or reset: only the environment variable mode writes files
 auto CPU::Profiler::dump() -> void {
-  if(!enabled || written || nodes.size() <= 1) return;
-  charge();
-  closeTimeline();
+  if(!enabled || written) return;
+  if(fromEnvironment && captured && nodes.size() > 1) {
+    stop();
+    exportFiles(outputPath);
+  }
+  stop();
   written = true;
+}
 
+auto CPU::Profiler::aggregate() const -> Aggregate {
+  Aggregate a;
   //inclusive costs: children always have higher indices than their parents
-  std::vector<Counters> inclusive(nodes.size());
-  for(size_t n = 0; n < nodes.size(); n++) inclusive[n] = nodes[n].self;
-  for(size_t n = nodes.size(); n-- > 1;) inclusive[nodes[n].parent] += inclusive[n];
+  a.inclusive.resize(nodes.size());
+  for(size_t n = 0; n < nodes.size(); n++) a.inclusive[n] = nodes[n].self;
+  for(size_t n = nodes.size(); n-- > 1;) a.inclusive[nodes[n].parent] += a.inclusive[n];
+
+  //per-function aggregation; roots and thread pseudo-nodes keep their own names
+  std::unordered_map<std::string, u32> functionIndex;
+  auto function = [&](const std::string& name) -> FunctionCost& {
+    auto it = functionIndex.find(name);
+    if(it != functionIndex.end()) return a.functions[it->second];
+    functionIndex[name] = a.functions.size();
+    a.functions.push_back({name});
+    return a.functions.back();
+  };
+  for(u32 n = 1; n < nodes.size(); n++) {
+    auto& node = nodes[n];
+    if(!node.calls && !a.inclusive[n].clocks && node.func != FuncThreadRoot) continue;  //only seen outside the capture
+    auto fname = node.func == FuncThreadRoot ? rootName(n) : nodeName(n);
+    {
+      auto& f = function(fname);
+      f.calls += node.calls;
+      f.self += node.self;
+    }
+    //count inclusive time only at the outermost activation to avoid double counting recursion
+    bool recursive = false;
+    for(u32 p = node.parent; p; p = nodes[p].parent) {
+      if(nodes[p].func == node.func && node.func != FuncThreadRoot) { recursive = true; break; }
+    }
+    if(!recursive) function(fname).inclusive += a.inclusive[n];
+    if(node.parent) {
+      u32 parent = node.parent;
+      auto& e = function(nodes[parent].func == FuncThreadRoot ? rootName(parent) : nodeName(parent)).edge(fname);
+      e.calls += node.calls;
+      e.inclusive += a.inclusive[n];
+    }
+  }
+  for(auto& f : a.functions) a.total += f.self;
+  return a;
+}
+
+//a thread root is named after its thread and entry point
+auto CPU::Profiler::rootName(u32 node) const -> std::string {
+  for(u32 n = 0; n < stacks.size(); n++) {
+    if(stacks[n].root == node) return threadName(n);
+  }
+  return nodeName(node);
+}
+
+auto CPU::Profiler::exportFiles(const std::string& prefix) -> bool {
+  if(!enabled || !captured || nodes.size() <= 1) return false;
+  if(recording) charge();
+  auto a = aggregate();
+  auto& inclusive = a.inclusive;
+  auto& functions = a.functions;
+  auto& total = a.total;
+  bool ok = true;
 
   auto cycles = [](s64 clocks) { return clocks / 2; };  //187.5 MHz scheduler clocks -> 93.75 MHz CPU cycles
   auto costLine = [&](const Counters& c) {
@@ -461,51 +601,8 @@ auto CPU::Profiler::dump() -> void {
     return std::string{buffer};
   };
 
-  //per-function aggregation; roots and thread pseudo-nodes keep their own names
-  struct Edge { u64 calls = 0; Counters inclusive; };
-  struct Function {
-    std::string name;
-    u64 calls = 0;
-    Counters self, inclusive;
-    std::vector<std::pair<std::string, Edge>> callees;
-    auto edge(const std::string& callee) -> Edge& {
-      for(auto& [n, e] : callees) if(n == callee) return e;
-      callees.push_back({callee, {}});
-      return callees.back().second;
-    }
-  };
-  std::vector<Function> functions;
-  std::unordered_map<std::string, u32> functionIndex;
-  auto function = [&](const std::string& name) -> Function& {
-    auto it = functionIndex.find(name);
-    if(it != functionIndex.end()) return functions[it->second];
-    functionIndex[name] = functions.size();
-    functions.push_back({name});
-    return functions.back();
-  };
-  for(u32 n = 1; n < nodes.size(); n++) {
-    auto fname = nodeName(n);
-    auto& f = function(fname);
-    f.calls += nodes[n].calls;
-    f.self += nodes[n].self;
-    //count inclusive time only at the outermost activation to avoid double counting recursion
-    bool recursive = false;
-    for(u32 p = nodes[n].parent; p; p = nodes[p].parent) {
-      if(nodes[p].func == nodes[n].func && nodes[n].func != FuncThreadRoot) { recursive = true; break; }
-    }
-    if(!recursive) function(fname).inclusive += inclusive[n];
-    if(nodes[n].parent) {
-      auto& e = function(nodeName(nodes[n].parent)).edge(fname);
-      e.calls += nodes[n].calls;
-      e.inclusive += inclusive[n];
-    }
-  }
-
-  Counters total;
-  for(auto& f : functions) total += f.self;
-
   //callgrind
-  if(FILE* fp = fopen((outputPath + ".callgrind").c_str(), "wb")) {
+  if(FILE* fp = fopen((prefix + ".callgrind").c_str(), "wb")) {
     fprintf(fp, "# callgrind format\nversion: 1\ncreator: ares-n64-profiler\n");
     fprintf(fp, "positions: line\n");
     fprintf(fp, "events: Cycles ICacheHit ICacheMiss DCacheHit DCacheMiss DCacheWriteback UncachedRdBytes UncachedWrBytes\n");
@@ -519,16 +616,16 @@ auto CPU::Profiler::dump() -> void {
       fprintf(fp, "\n");
     }
     fclose(fp);
-  }
+  } else ok = false;
 
   //folded stacks (one line per call tree node with self time)
-  if(FILE* fp = fopen((outputPath + ".folded").c_str(), "wb")) {
+  if(FILE* fp = fopen((prefix + ".folded").c_str(), "wb")) {
     std::vector<std::string> path;
     for(u32 n = 1; n < nodes.size(); n++) {
       s64 value = cycles(nodes[n].self.clocks);
       if(value <= 0) continue;
       path.clear();
-      for(u32 p = n; p; p = nodes[p].parent) path.push_back(nodeName(p));
+      for(u32 p = n; p; p = nodes[p].parent) path.push_back(nodes[p].func == FuncThreadRoot ? rootName(p) : nodeName(p));
       std::string line;
       for(size_t i = path.size(); i-- > 0;) {
         line += path[i];
@@ -537,13 +634,13 @@ auto CPU::Profiler::dump() -> void {
       fprintf(fp, "%s %lld\n", line.c_str(), (long long)value);
     }
     fclose(fp);
-  }
+  } else ok = false;
 
   //flat text report sorted by self cycles
-  if(FILE* fp = fopen((outputPath + ".txt").c_str(), "wb")) {
-    std::vector<Function*> sorted;
+  if(FILE* fp = fopen((prefix + ".txt").c_str(), "wb")) {
+    std::vector<FunctionCost*> sorted;
     for(auto& f : functions) sorted.push_back(&f);
-    std::sort(sorted.begin(), sorted.end(), [](Function* a, Function* b) { return a->self.clocks > b->self.clocks; });
+    std::sort(sorted.begin(), sorted.end(), [](FunctionCost* a, FunctionCost* b) { return a->self.clocks > b->self.clocks; });
     fprintf(fp, "ares N64 profile: %lld CPU cycles (%.3f s at 93.75 MHz), %llu call/return events\n",
       (long long)cycles(total.clocks), cycles(total.clocks) / 93750000.0, (unsigned long long)eventCount);
     if(stackOverflows) fprintf(fp, "WARNING: shadow stack overflowed %llu times; call tree parents may be incomplete\n", (unsigned long long)stackOverflows);
@@ -564,11 +661,12 @@ auto CPU::Profiler::dump() -> void {
     }
     writeTimelineSummary(fp);
     fclose(fp);
-  }
+  } else ok = false;
 
-  writeTrace();
+  if(!writeTrace(prefix + ".trace.json")) ok = false;
   printf("[profiler] wrote %s.{callgrind,folded,txt,trace.json} (%d call tree nodes, %d timeline events)\n",
-    outputPath.c_str(), (int)nodes.size(), (int)(spans.size() + instants.size()));
+    prefix.c_str(), (int)nodes.size(), (int)(spans.size() + instants.size()));
+  return ok;
 }
 
 //timeline
@@ -588,7 +686,7 @@ auto CPU::Profiler::label(const std::string& name) -> u32 {
 }
 
 auto CPU::Profiler::span(u32 track, u32 label, s64 start, s64 end) -> void {
-  if(written || end <= start) return;
+  if(written || !recording || end <= start) return;
   if(spans.size() + instants.size() >= MaxTimelineEvents) {
     if(!droppedEvents++) timelineFullAt = start;
     return;
@@ -597,7 +695,7 @@ auto CPU::Profiler::span(u32 track, u32 label, s64 start, s64 end) -> void {
 }
 
 auto CPU::Profiler::instant(u32 track, u32 label, s64 time, double value) -> void {
-  if(written) return;
+  if(written || !recording) return;
   if(spans.size() + instants.size() >= MaxTimelineEvents) {
     if(!droppedEvents++) timelineFullAt = time;
     return;
@@ -721,7 +819,7 @@ auto CPU::Profiler::rspPoll(s64 rspClock) -> void {
     if(dma) {
       rspDmaStart = t;
       rspDmaLabel = label("SP DMA");
-    } else {
+    } else if(recording) {
       rspDmaBusyClocks += t - rspDmaStart;
       dmaMeter.add(max(rspDmaStart, dmaMeteredUntil), t);
       //back-to-back DMAs (microcode streaming) merge into one span: 2000 clocks is about 10 us
@@ -744,7 +842,7 @@ auto CPU::Profiler::rdpSubmit(s64 threadClock, u32 bytes) -> void {
 }
 
 auto CPU::Profiler::rdpBusy(s64 start, s64 end) -> void {
-  if(written || end <= start) return;
+  if(written || !recording || end <= start) return;
   s64 t0 = clockBase + start, t1 = clockBase + end;
   rdpBusyClocks += t1 - t0;
   rdpMeter.add(t0, t1);
@@ -759,9 +857,9 @@ auto CPU::Profiler::rdpBusy(s64 start, s64 end) -> void {
 }
 
 //Chrome trace event format: open in https://ui.perfetto.dev or chrome://tracing
-auto CPU::Profiler::writeTrace() -> void {
-  FILE* fp = fopen((outputPath + ".trace.json").c_str(), "wb");
-  if(!fp) return;
+auto CPU::Profiler::writeTrace(const std::string& path) -> bool {
+  FILE* fp = fopen(path.c_str(), "wb");
+  if(!fp) return false;
   auto us = [](s64 clocks) { return (clocks < 0 ? 0 : clocks) / 187.5; };  //187.5 MHz -> microseconds
   auto escape = [](const std::string& s) {
     std::string r;
@@ -800,50 +898,58 @@ auto CPU::Profiler::writeTrace() -> void {
   }
   fprintf(fp, "\n]}\n");
   fclose(fp);
+  return true;
 }
 
-auto CPU::Profiler::writeTimelineSummary(FILE* fp) -> void {
+auto CPU::Profiler::summarize() const -> Summary {
+  Summary s;
   //when the timeline filled up, percentages are relative to the part that was recorded
-  s64 fullRun = now();
-  s64 total = droppedEvents && timelineFullAt > 0 ? timelineFullAt : fullRun;
-  if(total <= 0) return;
+  s.fullRun = endTime();
+  s.total = droppedEvents && timelineFullAt > 0 ? timelineFullAt : s.fullRun;
   //a yielded task and its resumptions count as one task; "longest" is the longest whole task (RSP time only)
-  struct Row { u32 label; u64 count = 0, yields = 0; s64 busy = 0, longest = 0, current = 0; };
-  std::vector<Row> rows;
-  auto row = [&](u32 label) -> Row& {
-    for(auto& r : rows) if(r.label == label) return r;
-    rows.push_back({label});
-    return rows.back();
+  auto row = [&](u32 label) -> RspRow& {
+    for(auto& r : s.rows) if(r.label == label) return r;
+    s.rows.push_back({label});
+    return s.rows.back();
   };
-  s64 rspBusy = 0;
-  for(auto& s : spans) {
-    if(s.track != TrackRSP) continue;
-    s64 d = s.end - s.start;
-    rspBusy += d;
-    auto it = resumedOf.find(s.label);
-    if(it != resumedOf.end() && !rows.empty()) {
+  for(auto& span : spans) {
+    if(span.track != TrackRSP) continue;
+    s64 d = span.end - span.start;
+    s.rspBusy += d;
+    auto it = resumedOf.find(span.label);
+    if(it != resumedOf.end() && !s.rows.empty()) {
       auto& r = row(it->second);
       if(r.count) { r.yields++; r.busy += d; r.current += d; r.longest = max(r.longest, r.current); continue; }
     }
-    auto& r = row(it != resumedOf.end() ? it->second : s.label);  //a resumption with no start recorded counts as a task
+    auto& r = row(it != resumedOf.end() ? it->second : span.label);  //a resumption with no start recorded counts as a task
     r.count++; r.busy += d; r.current = d; r.longest = max(r.longest, d);
   }
-  std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.busy > b.busy; });
-  u64 frameCount = 0;
-  for(auto& i : instants) if(i.track == TrackFrames) frameCount++;
-  auto ms = [](s64 clocks) { return clocks / 187500.0; };
+  std::sort(s.rows.begin(), s.rows.end(), [](const RspRow& a, const RspRow& b) { return a.busy > b.busy; });
+  for(auto& i : instants) if(i.track == TrackFrames) s.frameCount++;
 
   //frames shown (VI origin changes); the first one has no previous frame to measure from
-  std::vector<s64> frameTimes;
-  std::vector<u32> frameVIs;
   s64 lastShown = -1;
-  u64 shown = 0;
   for(auto& i : instants) {
     if(i.track != TrackSwap) continue;
-    shown++;
-    if(lastShown >= 0 && i.value > 0) frameTimes.push_back(i.time - lastShown), frameVIs.push_back((u32)i.value);
+    s.shown++;
+    if(lastShown >= 0 && i.value > 0) s.frameTimes.push_back(i.time - lastShown), s.frameVIs.push_back((u32)i.value);
     lastShown = i.time;
   }
+  return s;
+}
+
+auto CPU::Profiler::writeTimelineSummary(FILE* fp) -> void {
+  auto summary = summarize();
+  s64 fullRun = summary.fullRun;
+  s64 total = summary.total;
+  if(total <= 0 || fullRun <= 0) return;
+  auto& rows = summary.rows;
+  s64 rspBusy = summary.rspBusy;
+  u64 frameCount = summary.frameCount;
+  u64 shown = summary.shown;
+  auto& frameTimes = summary.frameTimes;
+  auto& frameVIs = summary.frameVIs;
+  auto ms = [](s64 clocks) { return clocks / 187500.0; };
   if(!frameTimes.empty()) {
     auto pct = [](auto v, double p) { std::sort(v.begin(), v.end()); return v[(size_t)(p * (v.size() - 1) + 0.5)]; };
     s64 sum = 0; u64 viSum = 0;
@@ -888,4 +994,162 @@ auto CPU::Profiler::writeTimelineSummary(FILE* fp) -> void {
               "  counter tracks (per VI frame) are exact\n", (long long)MergeGap, MergeGap / 187.5);
   if(droppedEvents) fprintf(fp, "warning: timeline full after %.3f ms; %llu later events dropped, figures above cover the recorded part only\n",
     ms(timelineFullAt), (unsigned long long)droppedEvents);
+}
+
+//results for the frontend
+
+auto CPU::Profiler::report() -> Profiling::Report {
+  Profiling::Report r;
+  if(!enabled || !captured || nodes.size() <= 1) return r;
+  if(recording) charge();
+  auto a = aggregate();
+  auto convert = [](const Counters& c) {
+    Profiling::Counters o;
+    o.cycles = c.clocks / 2;  //187.5 MHz scheduler clocks -> 93.75 MHz CPU cycles
+    o.icacheHits = c.icacheHits; o.icacheMisses = c.icacheMisses;
+    o.dcacheHits = c.dcacheHits; o.dcacheMisses = c.dcacheMisses; o.dcacheWritebacks = c.dcacheWritebacks;
+    o.uncachedReads = c.uncachedReads; o.uncachedWrites = c.uncachedWrites;
+    return o;
+  };
+  r.valid = true;
+  r.symbols = elfPath;
+  r.total = convert(a.total);
+  r.events = eventCount;
+  r.stackOverflows = stackOverflows;
+  r.droppedTimelineEvents = droppedEvents;
+  r.partialCallTree = partial;
+
+  for(auto& f : a.functions) {
+    Profiling::Function o;
+    o.name = f.name;
+    o.calls = f.calls;
+    o.self = convert(f.self);
+    o.inclusive = convert(f.inclusive);
+    r.functions.push_back(std::move(o));
+  }
+  std::sort(r.functions.begin(), r.functions.end(), [](auto& x, auto& y) { return x.self.cycles > y.self.cycles; });
+
+  //call tree: nodes only seen outside the capture are left out (their name stays empty)
+  auto kept = [&](u32 n) { return nodes[n].calls || a.inclusive[n].clocks || nodes[n].func == FuncThreadRoot; };
+  r.tree.resize(nodes.size());
+  for(u32 n = 1; n < nodes.size(); n++) {
+    if(!kept(n)) continue;
+    auto& node = nodes[n];
+    auto& o = r.tree[n];
+    o.name = node.func == FuncThreadRoot ? rootName(n) : nodeName(n);
+    o.parent = node.parent;
+    o.depth = node.parent ? r.tree[node.parent].depth + 1 : 0;  //parents have lower indices
+    o.calls = node.calls;
+    o.self = convert(node.self);
+    o.inclusive = convert(a.inclusive[n]);
+    for(auto& [func, child] : node.children) if(kept(child)) o.children.push_back(child);
+    std::sort(o.children.begin(), o.children.end(), [&](u32 x, u32 y) { return a.inclusive[x].clocks > a.inclusive[y].clocks; });
+    if(!node.parent && a.inclusive[n].clocks > 0) r.roots.push_back(n);
+  }
+  std::sort(r.roots.begin(), r.roots.end(), [&](u32 x, u32 y) { return a.inclusive[x].clocks > a.inclusive[y].clocks; });
+
+  auto s = summarize();
+  auto ms = [](s64 clocks) { return clocks / 187500.0; };
+  r.milliseconds = ms(s.fullRun);
+  r.viFrames = s.frameCount;
+  r.framesShown = s.shown;
+  if(!s.frameTimes.empty()) {
+    auto times = s.frameTimes;
+    std::sort(times.begin(), times.end());
+    s64 sum = 0;
+    for(auto t : times) sum += t;
+    r.frameMsAverage = ms(sum) / times.size();
+    r.frameMsMedian = ms(times[(size_t)(0.5 * (times.size() - 1) + 0.5)]);
+    r.frameMsP90 = ms(times[(size_t)(0.9 * (times.size() - 1) + 0.5)]);
+    r.fps = r.frameMsAverage > 0 ? 1000.0 / r.frameMsAverage : 0;
+  }
+  if(s.total > 0) r.rspBusy = 100.0 * s.rspBusy / s.total;
+  if(s.fullRun > 0) r.spDmaBusy = 100.0 * rspDmaBusyClocks / s.fullRun;
+  r.rdpModelled = rdp.timing.enabled;
+  if(s.fullRun > 0 && r.rdpModelled) r.rdpBusy = 100.0 * rdpBusyClocks / s.fullRun;
+  for(auto& row : s.rows) {
+    Profiling::RspTask t;
+    t.name = labels[row.label];
+    t.count = row.count;
+    t.yields = row.yields;
+    t.busyMs = ms(row.busy);
+    t.longestMs = ms(row.longest);
+    r.rspTasks.push_back(std::move(t));
+  }
+  return r;
+}
+
+namespace Profiling {
+
+auto status() -> Status {
+  Status s;
+  auto& p = cpu.profiler;
+  s.gameLoaded = (bool)cpu.node;
+  if(!s.gameLoaded) return s;
+  if(p.pendingEnable || p.pendingStart) s.state = State::Waiting;
+  else if(!p.enabled || p.written) s.state = State::Off;
+  else s.state = p.recording ? State::Recording : State::Idle;
+  s.armedAtBoot = p.enabled && p.armedAtBoot;
+  s.symbols = p.elfPath;
+  s.symbolCount = p.symbols.size();
+  s.frames = p.frames;
+  if(p.captured) {
+    s.captureFrames = p.captureFrames;
+    s.captureMs = p.endTime() / 187500.0;
+    s.timelineEvents = p.spans.size() + p.instants.size();
+  }
+  return s;
+}
+
+auto setArmed(bool armed) -> void {
+  cpu.profiler.optionEnabled = armed;
+}
+
+auto start() -> bool {
+  if(!cpu.node) return false;
+  return cpu.profiler.start();
+}
+
+auto stop() -> bool {
+  if(!cpu.node) return false;
+  return cpu.profiler.stop();
+}
+
+auto report() -> Report {
+  if(!cpu.node) return {};
+  return cpu.profiler.report();
+}
+
+//symbols can change at any time; while the profiler runs, its call tree starts again
+//(the old one refers to functions by the old symbols)
+auto loadSymbols(const std::string& elf) -> bool {
+  auto& p = cpu.profiler;
+  auto symbols = p.symbols;
+  auto exactSymbols = p.exactSymbols;
+  auto runningThreadSymbol = p.runningThreadSymbol;
+  auto entryPoint = p.entryPoint;
+  if(!p.loadSymbols(elf)) {
+    p.symbols = std::move(symbols);
+    p.exactSymbols = std::move(exactSymbols);
+    p.runningThreadSymbol = runningThreadSymbol;
+    p.entryPoint = entryPoint;
+    return false;
+  }
+  p.elfPath = elf;
+  p.optionSymbols = elf;
+  if(cpu.node && p.enabled && !p.written) {
+    bool recording = p.recording;
+    p.reset();
+    p.partial = true;
+    p.entered = true;  //the program is already running: the jump to the entry point has been seen
+    if(recording) p.start();
+  }
+  return true;
+}
+
+auto exportFiles(const std::string& prefix) -> bool {
+  if(!cpu.node) return false;
+  return cpu.profiler.exportFiles(prefix);
+}
+
 }

@@ -1,7 +1,8 @@
 //profiler.cpp
 //Function-level CPU profiler: shadow call stack driven by call/return
 //instructions, charging cycles and cache counters to a call tree.
-//Enabled with the ARES_N64_PROFILE_ELF (or ARES_N64_PROFILE=1) environment variable.
+//Enabled with the ARES_N64_PROFILE_ELF (or ARES_N64_PROFILE=1) environment variable,
+//or from the frontend (Tools > Profiler, through n64/profiler.hpp).
 struct Profiler {
   CPU& self;
   Profiler(CPU& self) : self(self) {}
@@ -62,13 +63,23 @@ struct Profiler {
   };
 
   //configuration
-  bool enabled = false;
+  bool enabled = false;          //tracking calls and returns (the hooks are live)
+  bool recording = false;        //charging costs and recording the timeline
+  bool armedAtBoot = false;      //enabled since power on, so call trees are complete
+  bool partial = false;          //enabled mid-game: callers already running then are missing
+  bool fromEnvironment = false;  //configured by environment variables: write files on unload
+  bool optionEnabled = false;    //frontend option "Profiler": enable at power on
+  std::string optionSymbols;     //frontend option "Profiler Symbols": ELF to load
   std::string elfPath;
   std::string outputPath;
   u64 skipFrames = 0;   //ARES_N64_PROFILE_SKIP: discard costs before this frame
   u64 stopFrame = 0;    //ARES_N64_PROFILE_FRAMES: write output and quit after this many frames
   u64 frames = 0;
-  bool written = false;
+  u64 captureStartFrame = 0, captureFrames = 0;
+  s64 captureEnd = 0;     //now() when the last capture stopped
+  bool captured = false;  //a capture has been recorded since the profiler was enabled
+  bool written = false;   //final output written (unload or power): stop everything
+  bool pendingEnable = false, pendingStart = false;  //applied between frames, outside recompiled code
 
   //state
   s64 clockBase = 0;
@@ -87,6 +98,33 @@ struct Profiler {
   auto loadSymbols(const std::string& path) -> bool;
   auto reset() -> void;
   auto dump() -> void;
+  auto start() -> bool;
+  auto stop() -> bool;
+  auto applyPending() -> void;  //called from CPU::main between frames
+  auto report() -> Nintendo64::Profiling::Report;
+  auto exportFiles(const std::string& prefix) -> bool;
+  auto endTime() const -> s64 { return recording ? now() : captureEnd; }
+
+  //costs merged per function (by name)
+  struct Edge { u64 calls = 0; Counters inclusive; };
+  struct FunctionCost {
+    std::string name;
+    u64 calls = 0;
+    Counters self, inclusive;
+    std::vector<std::pair<std::string, Edge>> callees;
+    auto edge(const std::string& callee) -> Edge& {
+      for(auto& [n, e] : callees) if(n == callee) return e;
+      callees.push_back({callee, {}});
+      return callees.back().second;
+    }
+  };
+  struct Aggregate {
+    std::vector<Counters> inclusive;  //per call tree node
+    std::vector<FunctionCost> functions;
+    Counters total;
+  };
+  auto aggregate() const -> Aggregate;
+  auto rootName(u32 node) const -> std::string;
 
   //true for J, JAL, JR, JALR and the REGIMM link branches
   static auto isCallOrReturn(u32 instruction) -> bool {
@@ -105,6 +143,7 @@ struct Profiler {
   auto synchronize(s64 clocks) -> void { clockBase += clocks; }
   auto frame() -> void;
   auto clearCosts() -> void;
+  auto countCall(u32 node) -> void { if(recording) nodes[node].calls++; }
 
   //internals
   auto counters() const -> Counters;
@@ -186,6 +225,17 @@ struct Profiler {
   auto rspPoll(s64 rspClock) -> void;  //called from RSP::main
   auto rdpSubmit(s64 threadClock, u32 bytes) -> void;  //called on DPC_END writes
   auto rdpBusy(s64 start, s64 end) -> void;  //estimated work, from the RDP timing model
-  auto writeTrace() -> void;
+  struct RspRow { u32 label; u64 count = 0, yields = 0; s64 busy = 0, longest = 0, current = 0; };
+  struct Summary {
+    s64 total = 0;    //recorded part of the capture (the timeline can fill up)
+    s64 fullRun = 0;  //whole capture
+    s64 rspBusy = 0;
+    u64 frameCount = 0, shown = 0;
+    std::vector<s64> frameTimes;
+    std::vector<u32> frameVIs;
+    std::vector<RspRow> rows;  //sorted by busy time
+  };
+  auto summarize() const -> Summary;
+  auto writeTrace(const std::string& path) -> bool;
   auto writeTimelineSummary(FILE* fp) -> void;
 } profiler{*this};

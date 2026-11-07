@@ -53,6 +53,7 @@ auto CPU::main() -> void {
 
   vi.refreshed = false;
   if(unlikely(profiler.enabled)) profiler.frame();
+  if(unlikely(profiler.pendingEnable || profiler.pendingStart)) profiler.applyPending();
   queue.remove(Queue::GDB_Poll);
   if(GDB::server.hasClient()) {
     queueInsert(Queue::GDB_Poll, (93750000*2)/60/240);

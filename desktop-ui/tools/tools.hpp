@@ -153,6 +153,82 @@ struct TapeViewer : VerticalLayout {
   Button stopButton{&tapeLayout, Size{~0, 0}};
 };
 
+#if defined(CORE_N64)
+#include <n64/profiler.hpp>
+#include <set>
+#endif
+
+//N64 CPU profiler: start and stop captures, and browse the results
+struct ProfilerViewer : VerticalLayout {
+  auto construct() -> void;
+  auto reload() -> void;
+  auto unload() -> void;
+  auto liveRefresh() -> void;
+  auto setVisible(bool visible = true) -> ProfilerViewer&;
+
+  #if defined(CORE_N64)
+  auto supported() const -> bool;
+  auto symbolsFor(string location) const -> string;  //symbols picked for this game, or <rom>.elf next to it
+  static auto defaultSymbolsFor(string location) -> string;  //<rom>.elf next to the game, if it exists
+  auto symbols() const -> string;         //the symbols to use for the loaded game
+  auto refreshStatus() -> void;
+  auto loadReport() -> void;
+  auto showSummary() -> void;
+  auto showFunctions() -> void;
+  auto showTree() -> void;
+  auto showRsp() -> void;
+  auto expandHotPath() -> void;
+  auto eventStart() -> void;
+  auto eventStop() -> void;
+  auto eventExport() -> void;
+  auto eventLoadSymbols() -> void;
+
+  ares::Nintendo64::Profiling::Report report;
+  ares::Nintendo64::Profiling::State lastState = ares::Nintendo64::Profiling::State::Off;
+  u32 functionSort = 2;       //column the function table is sorted by
+  std::vector<u32> treeRows;  //call tree nodes shown, in order
+  std::set<u32> expanded;
+  string chosenGame;     //game the symbols below were picked for
+  string chosenSymbols;  //symbols picked with Load, for that game
+  u64 lastRefresh = 0;
+  #endif
+
+  Label profilerLabel{this, Size{~0, 0}, 5};
+  HorizontalLayout controlLayout{this, Size{~0, 0}, 5};
+    Button startButton{&controlLayout, Size{80_sx, 0}};
+    Button stopButton{&controlLayout, Size{80_sx, 0}};
+    Button exportButton{&controlLayout, Size{80_sx, 0}};
+    Label statusLabel{&controlLayout, Size{~0, 0}, 2};
+  HorizontalLayout symbolsLayout{this, Size{~0, 0}, 5};
+    Label symbolsLabel{&symbolsLayout, Size{0, 0}, 2};
+    Label symbolsPath{&symbolsLayout, Size{~0, 0}, 2};
+    Button symbolsButton{&symbolsLayout, Size{80_sx, 0}};
+  HorizontalLayout armLayout{this, Size{~0, 0}, 5};
+    CheckLabel armOption{&armLayout, Size{0, 0}, 5};
+    Label armHint{&armLayout, Size{~0, 0}};
+  TabFrame tabs{this, Size{~0, ~0}};
+    TabFrameItem summaryTab{&tabs};
+      VerticalLayout summaryLayout{&summaryTab};
+        TextEdit summaryView{&summaryLayout, Size{~0, ~0}};
+    TabFrameItem functionsTab{&tabs};
+      VerticalLayout functionsLayout{&functionsTab};
+        HorizontalLayout filterLayout{&functionsLayout, Size{~0, 0}, 5};
+          Label filterLabel{&filterLayout, Size{0, 0}, 2};
+          LineEdit filterEdit{&filterLayout, Size{~0, 0}, 5};
+          Label functionsHint{&filterLayout, Size{0, 0}};
+        TableView functionList{&functionsLayout, Size{~0, ~0}};
+    TabFrameItem treeTab{&tabs};
+      VerticalLayout treeLayout{&treeTab};
+        HorizontalLayout treeControlLayout{&treeLayout, Size{~0, 0}, 5};
+          Button hotPathButton{&treeControlLayout, Size{0, 0}, 5};
+          Button collapseButton{&treeControlLayout, Size{0, 0}, 5};
+          Label treeHint{&treeControlLayout, Size{~0, 0}};
+        TableView treeList{&treeLayout, Size{~0, ~0}};
+    TabFrameItem rspTab{&tabs};
+      VerticalLayout rspLayout{&rspTab};
+        TableView rspList{&rspLayout, Size{~0, ~0}};
+};
+
 struct ToolsWindow : Window {
   ToolsWindow();
   auto show(const string& panel) -> void;
@@ -169,6 +245,7 @@ struct ToolsWindow : Window {
       PropertiesViewer propertiesViewer;
       TraceLogger traceLogger;
       TapeViewer tapeViewer;
+      ProfilerViewer profilerViewer;
       HomePanel homePanel;
 };
 
@@ -182,3 +259,4 @@ extern StreamManager& streamManager;
 extern PropertiesViewer& propertiesViewer;
 extern TraceLogger& traceLogger;
 extern TapeViewer& tapeViewer;
+extern ProfilerViewer& profilerViewer;

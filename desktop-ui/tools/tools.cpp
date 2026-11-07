@@ -7,6 +7,7 @@
 #include "properties.cpp"
 #include "tracer.cpp"
 #include "tape.cpp"
+#include "profiler.cpp"
 
 namespace Instances { Instance<ToolsWindow> toolsWindow; }
 ToolsWindow& toolsWindow = Instances::toolsWindow();
@@ -18,6 +19,7 @@ StreamManager& streamManager = toolsWindow.streamManager;
 PropertiesViewer& propertiesViewer = toolsWindow.propertiesViewer;
 TraceLogger& traceLogger = toolsWindow.traceLogger;
 TapeViewer& tapeViewer = toolsWindow.tapeViewer;
+ProfilerViewer& profilerViewer = toolsWindow.profilerViewer;
 
 ToolsWindow::ToolsWindow() {
 
@@ -32,6 +34,7 @@ ToolsWindow::ToolsWindow() {
   panelList.append(ListViewItem().setText("Properties").setIcon(Icon::Emblem::Text));
   panelList.append(ListViewItem().setText("Tracer").setIcon(Icon::Emblem::Script));
   panelList.append(ListViewItem().setText("Tape").setIcon(Icon::Device::Tape));
+  panelList.append(ListViewItem().setText("Profiler").setIcon(Icon::Emblem::Program));
   panelList->setUsesSidebarStyle();
   panelList.onChange([&] { eventChange(); });
 
@@ -45,6 +48,7 @@ ToolsWindow::ToolsWindow() {
   panelContainer.append(traceLogger, Size{~0, ~0});
   panelContainer.append(homePanel, Size{~0, ~0});
   panelContainer.append(tapeViewer, Size{~0, ~0});
+  panelContainer.append(profilerViewer, Size{~0, ~0});
 
   manifestViewer.construct();
   cheatEditor.construct();
@@ -55,6 +59,7 @@ ToolsWindow::ToolsWindow() {
   traceLogger.construct();
   homePanel.construct();
   tapeViewer.construct();
+  profilerViewer.construct();
 
   setDismissable();
   setTitle("Tools");
@@ -86,6 +91,7 @@ auto ToolsWindow::eventChange() -> void {
   traceLogger.setVisible(false);
   homePanel.setVisible(false);
   tapeViewer.setVisible(false);
+  profilerViewer.setVisible(false);
 
   bool found = false;
   if(auto item = panelList.selected()) {
@@ -97,6 +103,7 @@ auto ToolsWindow::eventChange() -> void {
     if(item.text() == "Properties") found = true, propertiesViewer.setVisible();
     if(item.text() == "Tracer"    ) found = true, traceLogger.setVisible();
     if(item.text() == "Tape"      ) found = true, tapeViewer.setVisible();
+    if(item.text() == "Profiler"  ) found = true, profilerViewer.setVisible();
   }
   if(!found) homePanel.setVisible();
 

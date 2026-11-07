@@ -50,6 +50,7 @@ target_sources(
     tools/manifest.cpp
     tools/memory.cpp
     tools/properties.cpp
+    tools/profiler.cpp
     tools/streams.cpp
     tools/tools.hpp
     tools/tracer.cpp
