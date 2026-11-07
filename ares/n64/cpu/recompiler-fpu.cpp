@@ -1072,7 +1072,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FADD_S, imm(Fdn), imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fdn, {Fsn, Ftn}, FpuWidth32, (5 - 1) * 2,
+      Fdn, {Fsn, Ftn}, FpuWidth32, (3 - 1) * 2,
       FpuCheckSnan,
       fpuDiv0Mask | fpuOverflowMask | fpuUnderflowMask | fpuInexactMask,
       [&]() -> void {
@@ -1089,7 +1089,7 @@ auto CPU::Recompiler::emitFPU(u32 instruction, EmitPcMode pcMode) -> EmitExecute
         callf(&CPU::FSUB_S, imm(Fdn), imm(Fsn), imm(Ftn));
         return EmitExecuteResult::MayFault;
       },
-      Fdn, {Fsn, Ftn}, FpuWidth32, (5 - 1) * 2,
+      Fdn, {Fsn, Ftn}, FpuWidth32, (3 - 1) * 2,
       FpuCheckSnan,
       fpuDiv0Mask | fpuOverflowMask | fpuUnderflowMask | fpuInexactMask,
       [&]() -> void {

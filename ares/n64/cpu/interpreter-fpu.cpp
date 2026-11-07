@@ -530,161 +530,193 @@ auto CPU::FCEIL_W_D(u8 fd, u8 fs) -> void {
 
 auto CPU::FC_EQ_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f32, 0); CF = FS(f32) == FT(f32);
 }
 
 auto CPU::FC_EQ_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f64, 0); CF = FS(f64) == FT(f64);
 }
 
 auto CPU::FC_F_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f32, 0); CF = 0;
 }
 
 auto CPU::FC_F_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f64, 0); CF = 0;
 }
 
 auto CPU::FC_LE_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f32, 0); CF = FS(f32) <= FT(f32);
 }
 
 auto CPU::FC_LE_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f64, 0); CF = FS(f64) <= FT(f64);
 }
 
 auto CPU::FC_LT_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f32, 0); CF = FS(f32) < FT(f32);
 }
 
 auto CPU::FC_LT_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f64, 0); CF = FS(f64) < FT(f64);
 }
 
 auto CPU::FC_NGE_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f32, 1); CF = FS(f32) < FT(f32);
 }
 
 auto CPU::FC_NGE_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f64, 1); CF = FS(f64) < FT(f64);
 }
 
 auto CPU::FC_NGL_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f32, 1); CF = FS(f32) == FT(f32);
 }
 
 auto CPU::FC_NGL_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f64, 1); CF = FS(f64) == FT(f64);
 }
 
 auto CPU::FC_NGLE_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f32, 1); CF = 0;
 }
 
 auto CPU::FC_NGLE_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f64, 1); CF = 0;
 }
 
 auto CPU::FC_NGT_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f32, 1); CF = FS(f32) <= FT(f32);
 }
 
 auto CPU::FC_NGT_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f64, 1); CF = FS(f64) <= FT(f64);
 }
 
 auto CPU::FC_OLE_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f32, 0); CF = FS(f32) <= FT(f32);
 }
 
 auto CPU::FC_OLE_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f64, 0); CF = FS(f64) <= FT(f64);
 }
 
 auto CPU::FC_OLT_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f32, 0); CF = FS(f32) < FT(f32);
 }
 
 auto CPU::FC_OLT_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f64, 0); CF = FS(f64) < FT(f64);
 }
 
 auto CPU::FC_SEQ_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f32, 0); CF = FS(f32) == FT(f32);
 }
 
 auto CPU::FC_SEQ_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f64, 0); CF = FS(f64) == FT(f64);
 }
 
 auto CPU::FC_SF_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f32, 0); CF = 0;
 }
 
 auto CPU::FC_SF_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   ORDERED(f64, 0); CF = 0;
 }
 
 auto CPU::FC_UEQ_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f32, 1); CF = FS(f32) == FT(f32);
 }
 
 auto CPU::FC_UEQ_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f64, 1); CF = FS(f64) == FT(f64);
 }
 
 auto CPU::FC_ULE_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f32, 1); CF = FS(f32) <= FT(f32);
 }
 
 auto CPU::FC_ULE_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f64, 1); CF = FS(f64) <= FT(f64);
 }
 
 auto CPU::FC_ULT_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f32, 1); CF = FS(f32) < FT(f32);
 }
 
 auto CPU::FC_ULT_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f64, 1); CF = FS(f64) < FT(f64);
 }
 
 auto CPU::FC_UN_S(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f32, 1); CF = 0;
 }
 
 auto CPU::FC_UN_D(u8 fs, u8 ft) -> void {
   if(!fpuCheckStart()) return;
+  step((3 - 1) * 2);
   UNORDERED(f64, 1); CF = 0;
 }
 
