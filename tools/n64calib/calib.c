@@ -211,6 +211,10 @@ static void cal_rdp_tri_zbuf_big(uint32_t n);
 // Watchdog: every test finishes in well under a second, so one still running
 // after 4 s has hung. libdragon's assert screen sets up the display itself and
 // shows which test it was, with the RDP and RSP status.
+// It cannot fire inside a measurement: libdragon sets COUNT/COMPARE to the next
+// timer due, so while it is armed (for every repeat of every test) the timer
+// interrupt is 4 s away, and it is the only timer. KIND_CPU rows run with
+// interrupts off; the others can only see VI, SP and DP interrupts.
 static timer_link_t watchdog;
 static void watchdog_fire(int ovfl)
 {
@@ -249,7 +253,7 @@ static void run_test(const test_t *t)
         uint32_t cpu_cyc = best.ticks * 2;
         uint32_t per100 = t->units ? (uint32_t)((uint64_t)cpu_cyc * 100 / t->units) : 0;
         snprintf(lines[pass][num_lines[pass]++], sizeof(lines[0][0]),
-            "%-3s %-15s %8lu %5lu.%02lu %8lu %8lu %8lu",
+            "%-3s %-19s %8lu %5lu.%02lu %8lu %8lu %8lu",
             t->group, t->name, UL(best.ticks), UL(per100 / 100), UL(per100 % 100),
             UL(best.clk), UL(best.pipe), UL(best.tmem));
     }
@@ -659,10 +663,10 @@ static void show_results(void)
         const page_t *pg = &pages[page];
         surface_t *disp = display_get();
         graphics_fill_screen(disp, 0);
-        snprintf(header, sizeof(header), "N64 calib ROM v3.1  page %d/%d  pass %d: %s",
+        snprintf(header, sizeof(header), "N64 calib ROM v3.2  page %d/%d  pass %d: %s",
             page + 1, num_pages, pg->pass + 1, pass_names[pg->pass]);
         graphics_draw_text(disp, 16, 2, header);
-        graphics_draw_text(disp, 16, 14, "grp test               ticks   cyc/u    clock     pipe     tmem  A:next B:back");
+        graphics_draw_text(disp, 16, 14, "grp test                   ticks   cyc/u    clock     pipe     tmem  A/B:page");
         for (int i = 0; i < pg->count; i++)
             graphics_draw_text(disp, 16, 26 + i * 8, lines[pg->pass][pg->first + i]);
         display_show(disp);
@@ -699,22 +703,11 @@ int main(void)
     cal_ovl = rspq_overlay_register(&rsp_calib);
     init_surfaces();
 
-    debugf("CAL,begin,v3.1\n");
+    debugf("CAL,begin,v3.2\n");
     debugf("CAL,group,test,count,units,ticks,dp_clock,dp_cmdbuf,dp_pipe,dp_tmem,pass\n");
 
-    // boot splash, so it is clear the ROM started; pass 1 then runs with the VI off
-    display_init(RESOLUTION_320x240, DEPTH_16_BPP, 2, GAMMA_NONE, FILTERS_DISABLED);
-    surface_t *disp = display_get();
-    graphics_fill_screen(disp, 0);
-    graphics_draw_text(disp, 16, 16, "N64 calibration ROM v3.1");
-    graphics_draw_text(disp, 16, 32, "Pass 1 runs with the VI off:");
-    graphics_draw_text(disp, 16, 40, "the screen goes black for ~10 s.");
-    graphics_draw_text(disp, 16, 56, "Then a blue screen: passes 2, 3.");
-    graphics_draw_text(disp, 16, 64, "Then the results (4 pages).");
-    display_show(disp);
-    wait_ms(3000);
-    display_close();
-
+    // no boot splash: libdragon leaves the VI running (blanked, with VBlank
+    // interrupts) after display_close, which made pass 1 no longer VI-off
     strcpy(pass_names[0], "VI off");
     run_pass(0);
 
