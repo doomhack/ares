@@ -1,3 +1,12 @@
+//Measured on hardware (tools/n64calib): a transfer pays a fixed setup cost, then
+//moves 8 bytes every 3.875 clocks from RDRAM, or every 3.5 clocks to RDRAM.
+static constexpr u32 DmaSetupClocks = 36;
+
+static auto dmaRowClocks(u32 length, bool write) -> u32 {
+  u32 blocks = (length + 8) / 8;
+  return write ? blocks * 7 / 2 : blocks * 31 / 8;
+}
+
 auto RSP::dmaQueue(u32 clocks, Thread& thread) -> void {
   dma.clock = (Thread::clock - thread.clock) - clocks;
 }
@@ -17,7 +26,7 @@ auto RSP::dmaTransferStart(Thread& thread) -> void {
     dma.current = dma.pending;
     dma.busy    = dma.full;
     dma.full    = {0,0};
-    dmaQueue((dma.current.length+8) / 8 * 3, thread);
+    dmaQueue(DmaSetupClocks + dmaRowClocks(dma.current.length, dma.busy.write), thread);
   }
 }
 
@@ -64,7 +73,7 @@ auto RSP::dmaTransferStep() -> void {
   if(dma.current.count) {
     dma.current.count -= 1;
     dma.current.dramAddress += dma.current.skip;
-    dmaQueue((dma.current.length+8) / 8 * 3, *this);
+    dmaQueue(dmaRowClocks(dma.current.length, dma.busy.write), *this);
   } else {
     dma.busy = {0,0};
     dma.current.length = 0xFF8;
