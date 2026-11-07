@@ -142,3 +142,106 @@ cal_code_32k:
     .endr
     jr    $31
     nop
+
+# ---- ROM v3 additions ----
+
+# void cal_fadd_loop(uint32_t iters): dependent ADD.S chain (1.0 + 0.0)
+    .align 5
+    .globl cal_fadd_loop
+cal_fadd_loop:
+    lui   $8, 0x3f80
+    mtc1  $8, $f0
+    mtc1  $0, $f2
+1:  add.s $f0, $f0, $f2
+    addiu $4, $4, -1
+    bnez  $4, 1b
+    nop
+    jr    $31
+    nop
+
+# void cal_fsqrt_loop(uint32_t iters): dependent SQRT.S chain (sqrt 1.0)
+    .align 5
+    .globl cal_fsqrt_loop
+cal_fsqrt_loop:
+    lui   $8, 0x3f80
+    mtc1  $8, $f0
+1:  sqrt.s $f0, $f0
+    addiu $4, $4, -1
+    bnez  $4, 1b
+    nop
+    jr    $31
+    nop
+
+# void cal_dmul_loop(uint32_t iters): dependent MUL.D chain (1.0 * 1.0)
+    .align 5
+    .globl cal_dmul_loop
+cal_dmul_loop:
+    lui   $8, 0x3ff0
+    dsll32 $8, $8, 0
+    dmtc1 $8, $f0
+    dmtc1 $8, $f2
+1:  mul.d $f0, $f0, $f2
+    addiu $4, $4, -1
+    bnez  $4, 1b
+    nop
+    jr    $31
+    nop
+
+# void cal_ddiv_loop(uint32_t iters): dependent DIV.D chain (1.0 / 1.0)
+    .align 5
+    .globl cal_ddiv_loop
+cal_ddiv_loop:
+    lui   $8, 0x3ff0
+    dsll32 $8, $8, 0
+    dmtc1 $8, $f0
+    dmtc1 $8, $f2
+1:  div.d $f0, $f0, $f2
+    addiu $4, $4, -1
+    bnez  $4, 1b
+    nop
+    jr    $31
+    nop
+
+# void cal_fmul_pair_loop(uint32_t iters): 8 MUL.S per iteration in two
+# independent chains (f0 and f4 alternate), so each one can overlap the other.
+    .align 5
+    .globl cal_fmul_pair_loop
+cal_fmul_pair_loop:
+    lui   $8, 0x3f80
+    mtc1  $8, $f0
+    mtc1  $8, $f2
+    mtc1  $8, $f4
+1:  mul.s $f0, $f0, $f2
+    mul.s $f4, $f4, $f2
+    mul.s $f0, $f0, $f2
+    mul.s $f4, $f4, $f2
+    mul.s $f0, $f0, $f2
+    mul.s $f4, $f4, $f2
+    mul.s $f0, $f0, $f2
+    mul.s $f4, $f4, $f2
+    addiu $4, $4, -1
+    bnez  $4, 1b
+    nop
+    jr    $31
+    nop
+
+# void cal_fcmp_loop(uint32_t iters): 8 C.LT.S back to back per iteration
+    .align 5
+    .globl cal_fcmp_loop
+cal_fcmp_loop:
+    lui   $8, 0x3f80
+    mtc1  $8, $f0
+    mtc1  $0, $f2
+1:  c.lt.s $f0, $f2
+    c.lt.s $f0, $f2
+    c.lt.s $f0, $f2
+    c.lt.s $f0, $f2
+    c.lt.s $f0, $f2
+    c.lt.s $f0, $f2
+    c.lt.s $f0, $f2
+    c.lt.s $f0, $f2
+    addiu $4, $4, -1
+    bnez  $4, 1b
+    nop
+    jr    $31
+    nop
