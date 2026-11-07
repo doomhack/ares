@@ -29,6 +29,7 @@ auto CPU::Profiler::configure() -> void {
   symbols.clear();
   exactSymbols.clear();
   runningThreadSymbol = 0;
+  entryPoint = 0;
   if(!elfPath.empty()) {
     if(loadSymbols(elfPath)) {
       printf("[profiler] loaded %d symbols from %s\n", (int)symbols.size(), elfPath.c_str());
@@ -55,6 +56,7 @@ auto CPU::Profiler::loadSymbols(const std::string& path) -> bool {
     }
     return value;
   };
+  entryPoint    = is64 ? rd(0x18, 8) : rd(0x18, 4);
   u64 shoff     = is64 ? rd(0x28, 8) : rd(0x20, 4);
   u32 shentsize = is64 ? rd(0x3a, 2) : rd(0x2e, 2);
   u32 shnum     = is64 ? rd(0x3c, 2) : rd(0x30, 2);
@@ -135,6 +137,8 @@ auto CPU::Profiler::reset() -> void {
   eventCount = 0;
   frames = 0;
   written = false;
+  entered = false;
+  stackOverflows = 0;
   clearTimeline();
   switchThread(0);
   last = counters();
@@ -208,10 +212,31 @@ auto CPU::Profiler::child(u32 parent, u32 func) -> u32 {
 auto CPU::Profiler::call(u32 target, u32 returnAddress) -> void {
   charge();
   auto& stack = stacks[current];
-  if(stack.frames.size() >= MaxDepth) return;
+  if(stack.frames.size() >= MaxDepth) {
+    //runaway stack (code that calls without returning): forget the oldest half
+    //rather than the new call, so the code running now is still attributed
+    stack.frames.erase(stack.frames.begin(), stack.frames.begin() + stack.frames.size() / 2);
+    stackOverflows++;
+  }
   u32 node = child(top(), resolve(target));
   nodes[node].calls++;
   stack.frames.push_back({node, returnAddress});
+}
+
+//The first jump to the ELF entry point is the boot code handing over to the
+//program. Whatever the boot code left on the shadow stack never unwinds, so
+//start again from the thread root. This happens once: e_entry is not always
+//the real boot target, and must not repeatedly wipe the stack of a running game.
+auto CPU::Profiler::enterProgram(u32 target) -> bool {
+  if(entered || !entryPoint || target != entryPoint) return false;
+  entered = true;
+  charge();
+  auto& stack = stacks[current];
+  stack.frames.clear();
+  stack.inException = false;
+  stackOverflows = 0;  //overflows in boot code say nothing about the program's call tree
+  call(target, 0xffff'ffff);
+  return true;
 }
 
 auto CPU::Profiler::tailCall(u32 target) -> void {
@@ -269,12 +294,14 @@ auto CPU::Profiler::instruction(u64 vaddr, u32 instruction) -> void {
     u32 funct = instruction & 63;
     if(funct == 0x08) {  //JR
       u32 target = r[rs].u32;
+      if(enterProgram(target)) return;
       if(rs == 31) return ret(target);
       if(isFunctionStart(target) && resolve(target) != nodes[top()].func) return tailCall(target);
       return;
     }
     if(funct == 0x09) {  //JALR
       u32 rd = instruction >> 11 & 31;
+      if(enterProgram(r[rs].u32)) return;
       if(rd == 0) return;
       return call(r[rs].u32, pc + 8);
     }
@@ -282,10 +309,12 @@ auto CPU::Profiler::instruction(u64 vaddr, u32 instruction) -> void {
   }
   if(opcode == 0x03) {  //JAL
     u32 target = (u32)((vaddr + 4) & 0xf000'0000) | (instruction & 0x03ff'ffff) << 2;
+    if(enterProgram(target)) return;
     return call(target, pc + 8);
   }
   if(opcode == 0x02) {  //J (tail call when it leaves the current function)
     u32 target = (u32)((vaddr + 4) & 0xf000'0000) | (instruction & 0x03ff'ffff) << 2;
+    if(enterProgram(target)) return;
     if(isFunctionStart(target) && resolve(target) != nodes[top()].func) return tailCall(target);
     return;
   }
@@ -492,6 +521,7 @@ auto CPU::Profiler::dump() -> void {
     std::sort(sorted.begin(), sorted.end(), [](Function* a, Function* b) { return a->self.clocks > b->self.clocks; });
     fprintf(fp, "ares N64 profile: %lld CPU cycles (%.3f s at 93.75 MHz), %llu call/return events\n",
       (long long)cycles(total.clocks), cycles(total.clocks) / 93750000.0, (unsigned long long)eventCount);
+    if(stackOverflows) fprintf(fp, "WARNING: shadow stack overflowed %llu times; call tree parents may be incomplete\n", (unsigned long long)stackOverflows);
     fprintf(fp, "I-cache: %lld hits, %lld misses. D-cache: %lld hits, %lld misses, %lld writebacks.\n\n",
       (long long)total.icacheHits, (long long)total.icacheMisses,
       (long long)total.dcacheHits, (long long)total.dcacheMisses, (long long)total.dcacheWritebacks);

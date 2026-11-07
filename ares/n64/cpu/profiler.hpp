@@ -78,6 +78,9 @@ struct Profiler {
   u32 current = 0;  //index into stacks
   std::vector<Symbol> symbols;
   u32 runningThreadSymbol = 0;  //address of __osRunningThread, if known
+  u32 entryPoint = 0;           //ELF e_entry, if known
+  bool entered = false;         //the jump to entryPoint has been seen
+  u64 stackOverflows = 0;       //times a call hit MaxDepth
   u64 eventCount = 0;
 
   auto configure() -> void;
@@ -110,6 +113,7 @@ struct Profiler {
   auto child(u32 parent, u32 func) -> u32;
   auto call(u32 target, u32 returnAddress) -> void;
   auto tailCall(u32 target) -> void;
+  auto enterProgram(u32 target) -> bool;
   auto ret(u32 target) -> void;
   auto switchThread(u32 thread) -> void;
   auto findSymbol(u32 address) const -> const Symbol*;
