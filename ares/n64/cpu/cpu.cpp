@@ -106,11 +106,13 @@ auto CPU::synchronize() -> void {
   rsp.clock -= clocks;
   rdp.clock -= clocks;
   pif.clock -= clocks;
+  rdp.timingAdvance(clocks);
   vi.main();
   ai.main();
   rsp.main();
   rdp.main();
   pif.main();
+  rdp.timingPoll();
 
   queue.step(clocks, [](u32 event) {
     switch(event) {

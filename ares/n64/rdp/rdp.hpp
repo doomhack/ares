@@ -67,7 +67,73 @@ struct RDP : Thread, Memory::RCP<RDP> {
   //io.cpp
   auto readWord(u32 address, Thread& thread) -> u32;
   auto writeWord(u32 address, u32 data, Thread& thread) -> void;
-  auto flushCommands() -> void;
+  auto flushCommands(Thread& thread) -> void;
+
+  //timing.cpp
+  auto timingPower() -> void;
+  auto timingBusy(s64 now) const -> bool;
+  auto timingSubmit(Thread& thread) -> void;
+  auto timingAdvance(s64 clocks) -> void;
+  auto timingPoll() -> void;
+  auto timingCurrent(s64 now) const -> u32;
+  auto timingPipeBusy(s64 now) const -> u32;
+
+  struct Timing {
+    static constexpr u32 FullQueue = 8;
+
+    auto pixelCost() const -> double;
+    auto pixelBytes() const -> double;
+    auto draw(u32 rows, u32 pixels, double rowCost) -> void;
+    auto triangle(const u64* words) -> void;
+    auto rectangle(u64 word) -> void;
+    auto load(double loadBytes) -> void;
+    auto decode(const u64* words, u32 code, s64 start) -> void;
+
+    bool enabled = true;
+
+    //timestamps, in scheduler clocks relative to the last CPU synchronize
+    s64 busyEnd = 0;
+    s64 pendingUntil = 0;  //a second buffer is waiting for the first to finish
+    s64 segmentFrom = 0;
+    s64 segmentTo = 0;
+    s64 pipeFrom = 0;
+    s64 fullQueue[FullQueue] = {};  //when each SYNC_FULL completes
+    u32 fullCount = 0;
+
+    //the DPC_CURRENT range covered by the latest submit
+    u32 segmentStart = 0;
+    u32 segmentEnd = 0;
+
+    //counters, in RDP clocks
+    u32 pipeOpen = 1;  //pipe busy counts from the first command until SYNC_FULL completes
+    s64 pipeBusy = 0;
+    double cmdBusy = 0;
+    double tmemBusy = 0;
+
+    //render state the estimate depends on
+    u32 cycleType = 0;
+    u32 imageRead = 0;
+    u32 zCompare = 0;
+    u32 zUpdate = 0;
+    u32 colorSize = 2;
+    u32 textureSize = 2;
+    s32 scissorLeft = 0;
+    s32 scissorTop = 0;
+    s32 scissorRight = 1024;
+    s32 scissorBottom = 1024;
+
+    //a command split across two submits
+    u64 carry[22] = {};
+    u32 carryLength = 0;
+
+    //totals for the submit being walked
+    double work = 0;
+    double bytes = 0;
+
+    //totals since the RDP was last idle, for the RDRAM contention estimate
+    double burstWork = 0;
+    double burstBytes = 0;
+  } timing;
 
   //serialization.cpp
   auto serialize(serializer&) -> void;

@@ -615,6 +615,7 @@ auto RDP::syncTile() -> void {
 
 //0x29
 auto RDP::syncFull() -> void {
+  if(timing.enabled) return;  //timingPoll raises the interrupt when the work is finished
   if(!command.crashed) {
     mi.raise(MI::IRQ::DP);
     command.bufferBusy = 0;

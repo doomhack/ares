@@ -16,7 +16,7 @@ auto RDP::readWord(u32 address, Thread& thread) -> u32 {
 
   if(address == 2) {
     //DPC_CURRENT
-    data.bit(0,23) = command.current;
+    data.bit(0,23) = timing.enabled ? timingCurrent(thread.clock) : (u32)command.current;
     if(&thread == &cpu) cpu.forceSynchronize();
   }
 
@@ -26,13 +26,15 @@ auto RDP::readWord(u32 address, Thread& thread) -> u32 {
     data.bit( 1) = command.freeze || command.crashed;
     data.bit( 2) = command.flush;
     data.bit( 3) = command.startGclk;
+    bool busy = timingBusy(thread.clock);
+    bool pending = timing.enabled && thread.clock < timing.pendingUntil;
     data.bit( 4) = command.tmemBusy > 0;
-    data.bit( 5) = command.pipeBusy > 0;
-    data.bit( 6) = command.bufferBusy > 0;
+    data.bit( 5) = command.pipeBusy > 0 || busy;
+    data.bit( 6) = command.bufferBusy > 0 || busy;
     data.bit( 7) = command.ready;
-    data.bit( 8) = 0;  //DMA busy
-    data.bit( 9) = command.endValid;
-    data.bit(10) = command.startValid;
+    data.bit( 8) = busy;  //DMA busy
+    data.bit( 9) = command.endValid || pending;
+    data.bit(10) = command.startValid || pending;
     if(&thread == &cpu) cpu.forceSynchronize();
   }
 
@@ -45,19 +47,19 @@ auto RDP::readWord(u32 address, Thread& thread) -> u32 {
 
   if(address == 5) {
     //DPC_BUSY
-    data.bit(0,23) = command.bufferBusy;
+    data.bit(0,23) = timing.enabled ? (u32)timing.cmdBusy : (u32)command.bufferBusy;
     if(&thread == &cpu) cpu.forceSynchronize();
   }
 
   if(address == 6) {
     //DPC_PIPE_BUSY
-    data.bit(0,23) = command.pipeBusy;
+    data.bit(0,23) = timing.enabled ? timingPipeBusy(thread.clock) : (u32)command.pipeBusy;
     if(&thread == &cpu) cpu.forceSynchronize();
   }
 
-  if(data == 7) {
+  if(address == 7) {
     //DPC_TMEM_BUSY
-    data.bit(0,23) = command.tmemBusy;
+    data.bit(0,23) = timing.enabled ? (u32)timing.tmemBusy : (u32)command.tmemBusy;
     if(&thread == &cpu) cpu.forceSynchronize();
   }
 
@@ -83,7 +85,7 @@ auto RDP::writeWord(u32 address, u32 data_, Thread& thread) -> void {
       command.startValid = 0;
     }
     if(unlikely(cpu.profiler.enabled)) cpu.profiler.rdpSubmit(thread.clock, command.end > command.current ? command.end - command.current : 0);
-    flushCommands();
+    flushCommands(thread);
     if(&thread == &cpu) cpu.forceSynchronize();
   }
 
@@ -95,13 +97,13 @@ auto RDP::writeWord(u32 address, u32 data_, Thread& thread) -> void {
     //DPC_STATUS
     if(data.bit(0)) command.source = 0;
     if(data.bit(1)) command.source = 1;
-    if(data.bit(2)) command.freeze = 0, flushCommands();
+    if(data.bit(2)) command.freeze = 0, flushCommands(thread);
     if(data.bit(3)) command.freeze = 1;
     if(data.bit(4)) command.flush = 0;
     if(data.bit(5)) command.flush = 1;
-    if(data.bit(6) && !command.crashed) command.tmemBusy = 0;
-    if(data.bit(7) && !command.crashed) command.pipeBusy = 0;
-    if(data.bit(8) && !command.crashed) command.bufferBusy = 0;
+    if(data.bit(6) && !command.crashed) command.tmemBusy = 0, timing.tmemBusy = 0;
+    if(data.bit(7) && !command.crashed) command.pipeBusy = 0, timing.pipeBusy = 0, timing.pipeFrom = thread.clock;
+    if(data.bit(8) && !command.crashed) command.bufferBusy = 0, timing.cmdBusy = 0;
     if(data.bit(9)) command.clock = (Thread::clock - thread.clock) / 3;
   }
 
@@ -193,11 +195,14 @@ auto RDP::IO::writeWord(u32 address, u32 data_, Thread& thread) -> void {
   self.debugger.ioDPS(Write, address, data);
 }
 
-auto RDP::flushCommands() -> void {
+auto RDP::flushCommands(Thread& thread) -> void {
   if(command.freeze || command.crashed) return;
   if(command.end <= command.current) return;
-  command.bufferBusy = 1;
-  command.pipeBusy = 1;
+  timingSubmit(thread);
+  if(!timing.enabled) {
+    command.bufferBusy = 1;
+    command.pipeBusy = 1;
+  }
   command.startGclk = 1;
   if(command.end > command.current) {
     if(!mapIdentityWarned && !rdram.mapIdentity) {
@@ -206,6 +211,6 @@ auto RDP::flushCommands() -> void {
     }
     render();
   }
-  command.bufferBusy = 0;
+  if(!timing.enabled) command.bufferBusy = 0;
   command.ready = 1;
 }

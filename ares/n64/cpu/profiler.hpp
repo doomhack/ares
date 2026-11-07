@@ -137,6 +137,8 @@ struct Profiler {
   s64 lastDmaSpan = -1;     //index of the last SP DMA span, for coalescing
   s64 rspDmaBusyClocks = 0; //true SP DMA busy time: coalesced spans also cover the gaps between DMAs
   u64 rdpFrameSubmits = 0, rdpFrameBytes = 0;
+  s64 lastRdpSpan = -1;     //index of the last RDP span, for coalescing
+  s64 rdpBusyClocks = 0;
   bool rspRunning = false, rspDmaBusy = false;
   s64 rspStart = 0, rspDmaStart = 0, threadStart = 0;
   u32 rspLabel = 0, rspDmaLabel = 0;
@@ -151,6 +153,7 @@ struct Profiler {
   auto rspTaskName() -> std::string;
   auto rspPoll(s64 rspClock) -> void;  //called from RSP::main
   auto rdpSubmit(s64 threadClock, u32 bytes) -> void;  //called on DPC_END writes
+  auto rdpBusy(s64 start, s64 end) -> void;  //estimated work, from the RDP timing model
   auto writeTrace() -> void;
   auto writeTimelineSummary(FILE* fp) -> void;
 } profiler{*this};

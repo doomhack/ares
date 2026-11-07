@@ -588,6 +588,8 @@ auto CPU::Profiler::clearTimeline() -> void {
   lastDmaSpan = -1;
   rspDmaBusyClocks = 0;
   rdpFrameSubmits = rdpFrameBytes = 0;
+  lastRdpSpan = -1;
+  rdpBusyClocks = 0;
   s64 t = now();
   threadStart = t;
   rspStart = t;
@@ -677,6 +679,20 @@ auto CPU::Profiler::rdpSubmit(s64 threadClock, u32 bytes) -> void {
   rdpFrameBytes += bytes;
 }
 
+auto CPU::Profiler::rdpBusy(s64 start, s64 end) -> void {
+  if(written || end <= start) return;
+  s64 t0 = clockBase + start, t1 = clockBase + end;
+  rdpBusyClocks += t1 - t0;
+  //back-to-back submits merge into one span
+  if(lastRdpSpan >= 0 && t0 - spans[lastRdpSpan].end < 2000) {
+    spans[lastRdpSpan].end = t1;
+    return;
+  }
+  size_t before = spans.size();
+  span(TrackRDP, label("RDP"), t0, t1);
+  if(spans.size() > before) lastRdpSpan = before;
+}
+
 //Chrome trace event format: open in https://ui.perfetto.dev or chrome://tracing
 auto CPU::Profiler::writeTrace() -> void {
   FILE* fp = fopen((outputPath + ".trace.json").c_str(), "wb");
@@ -701,6 +717,7 @@ auto CPU::Profiler::writeTrace() -> void {
   for(u32 n = 0; n < stacks.size(); n++) track(TrackThreadBase + n, "CPU " + threadName(n), 10 + n);
   track(TrackRSP, "RSP", 1000);
   track(TrackRSPDMA, "SP DMA", 1001);
+  track(TrackRDP, "RDP (estimated)", 1002);
   for(auto& s : spans) {
     std::string name = s.track >= TrackThreadBase ? threadName(s.track - TrackThreadBase) : labels[s.label];
     fprintf(fp, ",\n{\"ph\":\"X\",\"pid\":1,\"tid\":%u,\"name\":\"%s\",\"ts\":%.3f,\"dur\":%.3f}",
@@ -753,6 +770,8 @@ auto CPU::Profiler::writeTimelineSummary(FILE* fp) -> void {
       100.0 * r.busy / total, (unsigned long long)r.count, ms(r.busy), ms(r.busy) / r.count, ms(r.longest),
       frameCount ? (double)r.count / frameCount : 0.0, r.name.c_str());
   }
+  if(rdp.timing.enabled) fprintf(fp, "\nRDP: busy %.2f%% (%.3f ms of %.3f ms, estimated by the RDP timing model)\n",
+    100.0 * rdpBusyClocks / fullRun, ms(rdpBusyClocks), ms(fullRun));
   if(droppedEvents) fprintf(fp, "warning: timeline full after %.3f ms; %llu later events dropped, figures above cover the recorded part only\n",
     ms(timelineFullAt), (unsigned long long)droppedEvents);
 }

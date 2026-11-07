@@ -170,7 +170,7 @@ auto CPU::read(PhysAccess access) -> maybe<u64> {
   u32 paddr = access.paddr;
   if(context.littleEndian()) paddr = reverseEndianPaddr<Size>(paddr);
   if(access.cache) return dcache.read<Size>(access.vaddr, paddr);
-  if(paddr <= 0x03ef'ffff) step(UncachedRdramReadClocks);
+  if(paddr <= 0x03ef'ffff) step(UncachedRdramReadClocks + busContention);
   return busRead<Size>(paddr);
 }
 
@@ -191,7 +191,7 @@ auto CPU::write(PhysAccess access, u64 data) -> bool {
   u32 paddr = access.paddr;
   if(context.littleEndian()) paddr = reverseEndianPaddr<Size>(paddr);
   if(access.cache) return dcache.write<Size>(access.vaddr, paddr, data), true;
-  if(paddr <= 0x03ef'ffff) step(UncachedRdramWriteClocks);
+  if(paddr <= 0x03ef'ffff) step(UncachedRdramWriteClocks + busContention);
   return busWrite<Size>(paddr, data), true;
 }
 

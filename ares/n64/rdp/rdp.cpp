@@ -4,6 +4,7 @@ namespace ares::Nintendo64 {
 
 RDP rdp;
 #include "render.cpp"
+#include "timing.cpp"
 #include "io.cpp"
 #include "debugger.cpp"
 #include "serialization.cpp"
@@ -60,6 +61,7 @@ auto RDP::power(bool reset) -> void {
   fillRectangle_ = {};
   io.bist = {};
   io.test = {};
+  timingPower();
   if(!reset) mapIdentityWarned = 0;
 }
 

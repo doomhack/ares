@@ -842,6 +842,7 @@ auto CPU::Recompiler::emit(u64 vaddr, u32 address, u64 stateKey) -> Block* {
           if(!sdram) add64(mem0(RdramRbusIcacheReadsAddr), mem0(RdramRbusIcacheReadsAddr), imm(ICache));
         }
         emitCpuStep(CPU::InstructionCache::FillClocks);
+        add64(CpuClockMem, CpuClockMem, mem(sreg(0), offsetof(CPU, busContention)));
         mov32(IcacheTagKeyMem(lineIndex), imm(tagKey));
         mov64(reg(1), mem0(ramDataField));
         mov128(IcacheLineWordsMem(lineIndex, 0x00), mem(reg(1), sljit_sw(ramByteOff + 0x00)));

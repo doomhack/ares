@@ -4,7 +4,7 @@ auto CPU::DataCache::Line::hit(u32 paddr) const -> bool {
 }
 
 auto CPU::DataCache::Line::fill(u32 paddr) -> void {
-  cpu.step(FillClocks);
+  cpu.step(FillClocks + cpu.busContention);
   const u32 tag = paddr & ~0x0000'0fffu;
   dirty  = 0;
   tagKey = tag;
@@ -13,7 +13,7 @@ auto CPU::DataCache::Line::fill(u32 paddr) -> void {
 }
 
 auto CPU::DataCache::Line::writeBack() -> void {
-  cpu.step(WriteBackClocks);
+  cpu.step(WriteBackClocks + cpu.busContention);
   const u32 tag = tagKey & ~0x0000'0fffu;
   cpu.busWriteBurst<DCache>(tag | index, words);
 }

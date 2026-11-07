@@ -209,7 +209,7 @@ struct CPU : Thread {
       }
 
       auto fill(u32 paddr, CPU& cpu) -> void {
-        cpu.step(FillClocks);
+        cpu.step(FillClocks + cpu.busContention);
         const u32 tag = paddr & ~0x0000'0fffu;
         tagKey = tag;
         setValid(true);
@@ -350,6 +350,9 @@ struct CPU : Thread {
   auto segment(u64 vaddr) -> Context::Segment;
   template<u32 Dir, u32 Size> auto devirtualize(u64 vaddr, bool raiseAlignedError = true, bool raiseExceptions = true) -> PhysAccess;
   auto devirtualizeDebug(u64 vaddr) -> u64;
+
+  //extra scheduler clocks on each RDRAM access by the CPU while the RDP is busy
+  s64 busContention = 0;
 
   //MUL.S costs 2 cycles, plus 1 more when the next instruction is also a MUL.S
   //(measured with dependent chains in tools/n64calib)
